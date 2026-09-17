@@ -1,0 +1,22 @@
+# -trimpath and -buildvcs=false keep a test binary a function of its
+# source alone, so a result cached by one worker slot counts for
+# another. -short skips TestBrowse: a worker would download the
+# headless shell on every cold cache and may lack its shared
+# libraries. A laptop runs the suite without -short.
+test: go test -short -trimpath -buildvcs=false -race -cover ./...
+
+# goimports -l lists what it would rewrite, and a non-empty list is
+# the failure, since a CI job that rewrote source would have nowhere
+# to put it.
+lint: out=$(goimports -local "$(go list -m)" -l .); if [ -n "$out" ]; then echo "$out"; exit 1; fi; go vet ./...
+
+# gopls at hint severity is what an editor underlines and nobody
+# reading a diff sees. It exits 0 either way, so awk reads the verdict.
+hints: git ls-files -z '*.go' | xargs -0 gopls check -severity=hint | awk '1; END { exit (NR > 0) }'
+
+# deadcode -test roots at the test binaries as well as main, so a
+# helper only a skipped test reaches still counts as reached.
+deadcode: deadcode -test ./... 2>&1 | awk '1; END { exit (NR > 0) }'
+
+# dprint wraps Markdown at 72, the same column the commits use.
+fmt: dprint check
