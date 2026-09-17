@@ -24,9 +24,28 @@ type cookie struct {
 	Value string
 }
 
+// viewport is the screen the page renders into.
+type viewport struct {
+	Width  int
+	Height int
+	// Scale is device pixels per CSS pixel. 1 for a desktop; 2 for a
+	// phone, so text in the PNG is as crisp as on the device.
+	Scale int
+	// Mobile turns on the mobile viewport, a touch screen, and a phone
+	// user agent, so a page that branches on any of them takes the
+	// phone branch.
+	Mobile bool
+}
+
+// phoneUserAgent is what a page sees from -phone. An iPhone rather than
+// an Android because that is what a mobile-first page here is checked
+// against first, and one string is enough to take a UA-sniffed branch.
+const phoneUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) " +
+	"AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+
 // open creates a tab and attaches to it. It sets the viewport and
 // nothing else: cookies and headers are the caller's next calls.
-func open(ctx context.Context, c *chrome, width, height int) (*page, error) {
+func open(ctx context.Context, c *chrome, v viewport) (*page, error) {
 	var t struct {
 		TargetID string `json:"targetId"`
 	}
@@ -45,13 +64,23 @@ func open(ctx context.Context, c *chrome, width, height int) (*page, error) {
 		return nil, err
 	}
 	metrics := map[string]any{
-		"width":             width,
-		"height":            height,
-		"deviceScaleFactor": 1,
-		"mobile":            false,
+		"width":             v.Width,
+		"height":            v.Height,
+		"deviceScaleFactor": v.Scale,
+		"mobile":            v.Mobile,
 	}
 	if err := p.call(ctx, "Emulation.setDeviceMetricsOverride", metrics, nil); err != nil {
 		return nil, err
+	}
+	if v.Mobile {
+		touch := map[string]any{"enabled": true, "maxTouchPoints": 5}
+		if err := p.call(ctx, "Emulation.setTouchEmulationEnabled", touch, nil); err != nil {
+			return nil, err
+		}
+		ua := map[string]any{"userAgent": phoneUserAgent, "platform": "iPhone"}
+		if err := p.call(ctx, "Emulation.setUserAgentOverride", ua, nil); err != nil {
+			return nil, err
+		}
 	}
 	return p, nil
 }

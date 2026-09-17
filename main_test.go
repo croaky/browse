@@ -96,13 +96,14 @@ func TestBrowse(t *testing.T) {
 	is := is.New(t)
 
 	var mu sync.Mutex
-	var gotCookie, gotHeader string
+	var gotCookie, gotHeader, gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		if c, err := r.Cookie("session"); err == nil {
 			gotCookie = c.Value
 		}
 		gotHeader = r.Header.Get("X-Browse")
+		gotUA = r.UserAgent()
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<!doctype html>
@@ -110,7 +111,9 @@ func TestBrowse(t *testing.T) {
 <style>#box { display: none; width: 100px; height: 100px; background: #0079ff }</style>
 <button id="reveal" onclick="document.getElementById('box').style.display='block'">Reveal</button>
 <div id="box"></div>
-<input id="q">`))
+<input id="q">
+<div id="touch" style="display:none;width:10px;height:10px"></div>
+<script>if (navigator.maxTouchPoints > 0) document.getElementById('touch').style.display='block'</script>`))
 	}))
 	defer srv.Close()
 
@@ -137,6 +140,24 @@ func TestBrowse(t *testing.T) {
 	is.NoErr(err)
 	is.Eq(img.Bounds().Dx(), 640)
 	is.Eq(img.Bounds().Dy(), 480)
+	mu.Lock()
+	is.True(!strings.Contains(gotUA, "iPhone"))
+	mu.Unlock()
+
+	// -phone: two device pixels per CSS pixel, a phone user agent on the
+	// request, and a touch screen the page can see. wait=#touch is the
+	// assertion on touch: the box shows only when maxTouchPoints > 0.
+	err = run([]string{"-phone", "-out", out, srv.URL + "/page", "wait=#touch"})
+	is.NoErr(err)
+	mu.Lock()
+	is.True(strings.Contains(gotUA, "iPhone"))
+	mu.Unlock()
+	data, err = os.ReadFile(out)
+	is.NoErr(err)
+	img, err = png.Decode(bytes.NewReader(data))
+	is.NoErr(err)
+	is.Eq(img.Bounds().Dx(), 780)
+	is.Eq(img.Bounds().Dy(), 1688)
 
 	// The action that fails names itself and the selector.
 	err = run([]string{"-out", out, srv.URL + "/page", "click=#missing"})

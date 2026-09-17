@@ -12,6 +12,10 @@
 //	wait=<selector>        wait until a match is visible
 //	sleep=<duration>       wait a fixed time, for a transition
 //
+// The viewport is 1280 by 900 at one device pixel per CSS pixel.
+// -phone is 390 by 844 at two, with a touch screen and a phone user
+// agent, for a page built for a phone first.
+//
 // Auth comes in through the environment, not flags, so a secret is
 // not in a process list or a shell history:
 //
@@ -66,8 +70,9 @@ func usage(fs *flag.FlagSet) {
 func run(args []string) error {
 	fs := flag.NewFlagSet("browse", flag.ContinueOnError)
 	fs.Usage = func() { usage(fs) }
-	width := fs.Int("width", 1280, "viewport width in pixels")
-	height := fs.Int("height", 900, "viewport height in pixels")
+	width := fs.Int("width", 1280, "viewport width in CSS pixels")
+	height := fs.Int("height", 900, "viewport height in CSS pixels")
+	phone := fs.Bool("phone", false, "a phone: 390 by 844 at 2x, touch, and a mobile user agent")
 	full := fs.Bool("full", false, "capture the whole document, not the viewport")
 	out := fs.String("out", "", "PNG path; default is <slug>.png from the URL path")
 	chromeFlag := fs.String("chrome", "", "a Chrome binary, instead of the pinned headless shell")
@@ -100,6 +105,19 @@ func run(args []string) error {
 	if outPath == "" {
 		outPath = slug(u) + ".png"
 	}
+	v := viewport{Width: *width, Height: *height, Scale: 1}
+	if *phone {
+		v = viewport{Width: 390, Height: 844, Scale: 2, Mobile: true}
+		// -width or -height beside -phone narrows or lengthens the phone.
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "width":
+				v.Width = *width
+			case "height":
+				v.Height = *height
+			}
+		})
+	}
 
 	// The download on a first run is outside the timeout: it is a
 	// one-time cost measured in the network, not in the page.
@@ -111,13 +129,13 @@ func run(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	c, err := launch(ctx, path, *width, *height)
+	c, err := launch(ctx, path, v.Width, v.Height)
 	if err != nil {
 		return err
 	}
 	defer c.close()
 
-	p, err := open(ctx, c, *width, *height)
+	p, err := open(ctx, c, v)
 	if err != nil {
 		return err
 	}

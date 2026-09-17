@@ -8,7 +8,7 @@ browser window.
 go install github.com/croaky/browse@latest
 
 browse http://localhost:3000/help
-browse -width 390 http://localhost:3000/portfolio
+browse -phone http://localhost:3000/portfolio
 browse http://localhost:3000/companies/12 click=.tab:nth-child(2) wait=.drawer.active
 browse -full -out tmp/index.png http://localhost:3000/
 ```
@@ -39,7 +39,12 @@ An action that fails names itself and the selector:
 
 ## Flags
 
-- `-width`, `-height`: the viewport, default 1280 by 900.
+- `-width`, `-height`: the viewport in CSS pixels, default 1280 by
+  900.
+- `-phone`: 390 by 844 at two device pixels per CSS pixel, a touch
+  screen, and an iPhone user agent, so a page built for a phone
+  renders and behaves as it does on one. `-width` or `-height` beside
+  it changes one dimension.
 - `-full`: capture the whole document, not the viewport.
 - `-out <path>`: where to write the PNG.
 - `-chrome <path>`: a Chrome binary, instead of the pinned headless
@@ -93,10 +98,10 @@ descriptors 3 and 4, each ended by a NUL byte. A pipe rather than a
 port, so two runs at once do not race for a port and nothing listens
 on the machine.
 
-The tool calls fourteen protocol methods. A library such as `chromedp`
+The tool calls sixteen protocol methods. A library such as `chromedp`
 brings generated bindings for the whole protocol, tens of megabytes in
 the module cache and a binary about 15 MB larger, and it tracks Chrome
-releases. Fourteen methods by hand is smaller than the import, and
+releases. Sixteen methods by hand is smaller than the import, and
 there is nothing to keep current.
 
 ## GitHub repo is a mirror
