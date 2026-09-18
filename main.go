@@ -12,6 +12,15 @@
 //	wait=<selector>        wait until a match is visible
 //	sleep=<duration>       wait a fixed time, for a transition
 //
+// The first colon in a type argument divides the selector from the
+// text. Write a colon in the selector as \: , as in
+// type=li\:nth-child(2):hello. The text needs no escape.
+//
+// click, hover, and type act on the element that is there now, and no
+// match is an error at once. A step that needs an element the page has
+// still to render takes a wait before it. One wait has -wait, five
+// seconds by default, and the whole run has -timeout.
+//
 // The viewport is 1280 by 900 at one device pixel per CSS pixel.
 // -phone is 390 by 844 at two, with a touch screen and a phone user
 // agent, for a page built for a phone first.
@@ -59,6 +68,8 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintf(fs.Output(), "  type=<selector>:<text>  focus the first match and type text\n")
 	fmt.Fprintf(fs.Output(), "  wait=<selector>         wait until a match is visible\n")
 	fmt.Fprintf(fs.Output(), "  sleep=<duration>        wait a fixed time\n\n")
+	fmt.Fprintf(fs.Output(), "The first colon in a type argument divides the selector from the\n")
+	fmt.Fprintf(fs.Output(), "text. Write a colon in the selector as \\: .\n\n")
 	fmt.Fprintf(fs.Output(), "environment:\n")
 	fmt.Fprintf(fs.Output(), "  BROWSE_COOKIE  cookies for the URL's host: name=value; name2=value2\n")
 	fmt.Fprintf(fs.Output(), "  BROWSE_HEADER  headers on every request, one per line: Name: value\n")
@@ -77,6 +88,7 @@ func run(args []string) error {
 	out := fs.String("out", "", "PNG path; default is <slug>.png from the URL path")
 	chromeFlag := fs.String("chrome", "", "a Chrome binary, instead of the pinned headless shell")
 	timeout := fs.Duration("timeout", 30*time.Second, "limit for the whole run")
+	wait := fs.Duration("wait", 5*time.Second, "limit for one wait action")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -148,7 +160,7 @@ func run(args []string) error {
 	if err := p.navigate(ctx, rawURL); err != nil {
 		return err
 	}
-	if err := p.run(ctx, actions); err != nil {
+	if err := p.run(ctx, actions, *wait); err != nil {
 		return err
 	}
 	png, err := p.screenshot(ctx, *full)

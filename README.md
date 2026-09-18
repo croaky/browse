@@ -34,8 +34,30 @@ Actions run in order after the page loads and before the screenshot:
 - `sleep=<duration>` waits a fixed time, for a transition the DOM does
   not signal.
 
+The first colon in a `type` argument divides the selector from the
+text. A selector holds a colon in a pseudo-class, so write that colon
+as `\:`:
+
+```sh
+browse http://localhost:3000/ 'type=li\:nth-child(2):hello'
+```
+
+The text needs no escape, because only the first colon divides:
+`type=#at:12:30` types `12:30`.
+
+Only `wait` waits. `click`, `hover`, and `type` act on the element
+that is there now, and no match is an error at once. A step that needs
+an element the page has still to render takes a `wait` before it.
+`browse` retries no action: a click that needs a retry needs a `wait`.
+
+One `wait` has `-wait`, five seconds by default, and the whole run has
+`-timeout`. The budget is per wait, so one selector that never shows
+stops that wait and leaves the run its time.
+
 An action that fails names itself and the selector:
-`click=#missing: no element matches "#missing"`.
+`click=#missing: no element matches "#missing"`. A wait that fails
+says how long it waited: `wait=#box: no element matches "#box" and is
+visible after 5s`.
 
 ## Flags
 
@@ -49,6 +71,7 @@ An action that fails names itself and the selector:
 - `-out <path>`: where to write the PNG.
 - `-chrome <path>`: a Chrome binary, instead of the pinned headless
   shell.
+- `-wait <duration>`: a limit for one `wait` action, default 5s.
 - `-timeout <duration>`: a limit for the whole run, default 30s.
 
 ## Auth
@@ -89,6 +112,19 @@ it. The headless shell has no browser UI and does not ask.
 Each run starts the browser with a fresh temporary profile and removes
 it at exit. The run reads no cookie, history, or extension of the
 user's own profile and writes nothing to it.
+
+The download has no checksum. Chrome for Testing publishes none, so a
+checksum here is one a person computes for each platform at each
+version, and a stale entry blocks a bump. The transfer is HTTPS from
+Google's bucket, a short read fails in the unzip, and the extracted
+tree moves into place in one rename. So an interrupted download leaves
+nothing for the next run to find.
+
+The pin holds until a Chrome release breaks something this tool uses,
+or until a page needs a newer renderer. `TestBrowse` is the guard: it
+drives the real browser through a cookie, a header, a pointer event,
+phone emulation, and a PNG decode. A bump is its own commit, with a
+laptop run of that test in the description.
 
 ## No browser library
 

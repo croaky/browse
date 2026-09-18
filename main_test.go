@@ -36,8 +36,47 @@ func TestParseActions(t *testing.T) {
 	is.HasErr(err)
 	is.True(strings.Contains(err.Error(), "type=selector:text"))
 
+	// A selector with a colon in it: \: is one literal colon, and the
+	// first colon the backslash does not escape divides.
+	_, err = parseActions([]string{`type=li\:nth-child(2):hello`})
+	is.NoErr(err)
+
 	_, err = parseActions([]string{"sleep=soon"})
 	is.HasErr(err)
+}
+
+func TestSplitType(t *testing.T) {
+	is := is.New(t)
+
+	sel, text, ok := splitType("#q:hello")
+	is.True(ok)
+	is.Eq(sel, "#q")
+	is.Eq(text, "hello")
+
+	// A colon in the text needs no escape: only the first one divides.
+	sel, text, ok = splitType("#q:12:30")
+	is.True(ok)
+	is.Eq(sel, "#q")
+	is.Eq(text, "12:30")
+
+	// A colon in the selector takes a backslash.
+	sel, text, ok = splitType(`li\:nth-child(2):hello`)
+	is.True(ok)
+	is.Eq(sel, "li:nth-child(2)")
+	is.Eq(text, "hello")
+
+	sel, text, ok = splitType(`input\:checked + label\:first-child:yes:no`)
+	is.True(ok)
+	is.Eq(sel, "input:checked + label:first-child")
+	is.Eq(text, "yes:no")
+
+	// No divider, and an empty selector, are both a refusal.
+	_, _, ok = splitType("#q")
+	is.True(!ok)
+	_, _, ok = splitType(`li\:nth-child(2)`)
+	is.True(!ok)
+	_, _, ok = splitType(":hello")
+	is.True(!ok)
 }
 
 func TestParseCookies(t *testing.T) {
@@ -163,6 +202,12 @@ func TestBrowse(t *testing.T) {
 	err = run([]string{"-out", out, srv.URL + "/page", "click=#missing"})
 	is.HasErr(err)
 	is.True(strings.Contains(err.Error(), `click=#missing: no element matches "#missing"`))
+
+	// A wait spends its own budget, not the run's, and says how long
+	// it waited. #box is in the page but hidden until the click.
+	err = run([]string{"-out", out, "-wait", "200ms", srv.URL + "/page", "wait=#box"})
+	is.HasErr(err)
+	is.True(strings.Contains(err.Error(), `wait=#box: no element matches "#box" and is visible after 200ms`))
 
 	// A server that is not there is an error before any action, and
 	// the message carries Chrome's reason.

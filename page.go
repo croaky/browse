@@ -257,17 +257,26 @@ func (p *page) typeText(ctx context.Context, selector, text string) error {
 }
 
 // waitFor polls until an element matches selector and has a box on
-// the page, or the context ends. Presence alone is not enough: a
+// the page, or budget runs out. Presence alone is not enough: a
 // hidden element matches querySelector and shows nothing.
-func (p *page) waitFor(ctx context.Context, selector string) error {
+//
+// The budget is per wait, not per run. One selector that never shows
+// stops that wait and leaves the rest of the run its time, so the
+// error names the wait that failed and not the run.
+func (p *page) waitFor(ctx context.Context, selector string, budget time.Duration) error {
 	sel, _ := json.Marshal(selector)
 	expr := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%s);
 		return !!el && el.getClientRects().length > 0;
 	})()`, sel)
+	wctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	for {
 		var visible bool
-		if err := p.eval(ctx, expr, &visible); err != nil {
+		if err := p.eval(wctx, expr, &visible); err != nil {
+			if ctx.Err() == nil && wctx.Err() != nil {
+				return fmt.Errorf("no element matches %q and is visible after %s", selector, budget)
+			}
 			return err
 		}
 		if visible {
@@ -275,8 +284,11 @@ func (p *page) waitFor(ctx context.Context, selector string) error {
 		}
 		select {
 		case <-time.After(100 * time.Millisecond):
-		case <-ctx.Done():
-			return fmt.Errorf("wait for %q: %w", selector, ctx.Err())
+		case <-wctx.Done():
+			if ctx.Err() != nil {
+				return fmt.Errorf("wait for %q: %w", selector, ctx.Err())
+			}
+			return fmt.Errorf("no element matches %q and is visible after %s", selector, budget)
 		}
 	}
 }
@@ -318,6 +330,30 @@ type action struct {
 // actionNames is the vocabulary, in the order the usage prints it.
 var actionNames = []string{"click", "hover", "type", "wait", "sleep"}
 
+// splitType divides a type argument at the first colon a backslash
+// does not escape. A selector holds a colon in a pseudo-class, so
+// `\:` in the selector is one literal colon: type=li\:nth-child(2):hi
+// types "hi" into "li:nth-child(2)". The text needs no escape,
+// because only the first colon divides.
+func splitType(arg string) (selector, text string, ok bool) {
+	var b strings.Builder
+	for i := 0; i < len(arg); i++ {
+		switch {
+		case arg[i] == '\\' && i+1 < len(arg) && arg[i+1] == ':':
+			b.WriteByte(':')
+			i++
+		case arg[i] == ':':
+			if b.Len() == 0 {
+				return "", "", false
+			}
+			return b.String(), arg[i+1:], true
+		default:
+			b.WriteByte(arg[i])
+		}
+	}
+	return "", "", false
+}
+
 // parseActions reads the arguments after the URL. Each is name=arg;
 // a name outside the vocabulary or an empty arg is an error that
 // says what the vocabulary is.
@@ -331,8 +367,8 @@ func parseActions(args []string) ([]action, error) {
 		switch name {
 		case "click", "hover", "wait":
 		case "type":
-			if _, _, ok := strings.Cut(arg, ":"); !ok {
-				return nil, fmt.Errorf("action %q: want type=selector:text", a)
+			if _, _, ok := splitType(arg); !ok {
+				return nil, fmt.Errorf(`action %q: want type=selector:text, with \: for a colon in the selector`, a)
 			}
 		case "sleep":
 			if _, err := time.ParseDuration(arg); err != nil {
@@ -347,8 +383,13 @@ func parseActions(args []string) ([]action, error) {
 }
 
 // run performs the actions in order. An error names the action that
-// failed, so a list of five says which one.
-func (p *page) run(ctx context.Context, actions []action) error {
+// failed, so a list of five says which one. wait is the budget for
+// one wait action.
+//
+// click, hover, and type do not wait: each acts on the element that
+// is there now, and no match is an error at once. A step that needs
+// an element the page has still to render takes a wait before it.
+func (p *page) run(ctx context.Context, actions []action, wait time.Duration) error {
 	for _, a := range actions {
 		var err error
 		switch a.Name {
@@ -357,10 +398,10 @@ func (p *page) run(ctx context.Context, actions []action) error {
 		case "hover":
 			err = p.hover(ctx, a.Arg)
 		case "type":
-			sel, text, _ := strings.Cut(a.Arg, ":")
+			sel, text, _ := splitType(a.Arg)
 			err = p.typeText(ctx, sel, text)
 		case "wait":
-			err = p.waitFor(ctx, a.Arg)
+			err = p.waitFor(ctx, a.Arg, wait)
 		case "sleep":
 			d, _ := time.ParseDuration(a.Arg)
 			select {
