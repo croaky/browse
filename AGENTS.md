@@ -59,11 +59,11 @@ The root `Checkfile` is the list, and CI runs it on every push. Run
 the same things before committing:
 
 ```sh
-goimports -local "$(go list -m)" -w .
+go run golang.org/x/tools/cmd/goimports@v0.45.0 -local "$(go list -m)" -w .
 go vet ./...
 go test -trimpath -buildvcs=false -race -cover ./...
 git ls-files -z '*.go' | xargs -0 gopls check -severity=hint
-deadcode -test ./...
+go run golang.org/x/tools/cmd/deadcode@v0.45.0 -test ./...
 dprint fmt
 ```
 
@@ -92,10 +92,10 @@ what it acts on.
 
 ## Changes
 
-Work happens on a cibot change. `cibot checkout` allocates one and
-prints a worktree; `cibot edit` sets its title and description before
+Work happens on a sockeye change. `soc checkout` allocates one and
+prints a worktree; `soc edit` sets its title and description before
 the code. After a push, read the checks with
-`git push && cibot show --wait`.
+`git push && soc show --wait`.
 
 ## Commits
 

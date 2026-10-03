@@ -123,7 +123,7 @@ func TestSlug(t *testing.T) {
 }
 
 // TestBrowse drives the real browser against a local server. It skips
-// under -short, which is how CI runs it: a worker would download the
+// under -short, which is how CI runs it: a runner would download the
 // shell on every cold cache and may lack its shared libraries. The
 // server records the cookie and header it received, the page has a
 // button that reveals a box, and the test asserts on the record and
