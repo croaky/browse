@@ -50,6 +50,15 @@ that is there now, and no match is an error at once. A step that needs
 an element the page has still to render takes a `wait` before it.
 `browse` retries no action: a click that needs a retry needs a `wait`.
 
+There is no scroll action. `click` and `hover` scroll their
+target to the center of the viewport before they act, and scroll a
+scroll box inside the page to reach it. So a capture of a page or a
+box scrolled part way hovers an element that far down:
+
+```sh
+browse http://localhost:3000/report 'hover=tbody tr:nth-child(40)'
+```
+
 One `wait` has `-wait`, five seconds by default, and the whole run has
 `-timeout`. The budget is per wait, so one selector that never shows
 stops that wait and leaves the run its time.

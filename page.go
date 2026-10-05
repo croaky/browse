@@ -178,8 +178,11 @@ type point struct {
 	Y float64 `json:"y"`
 }
 
-// center scrolls the first match of selector into view and returns its
-// center. No match is an error that names the selector.
+// center scrolls the first match of selector to the center of the
+// viewport and returns its center. No match is an error that names the
+// selector. The scroll is the only way a run scrolls, and the README
+// says so: scrollIntoView also scrolls a scroll box inside the page,
+// so a hover on a row deep in a table shows that table scrolled.
 func (p *page) center(ctx context.Context, selector string) (point, error) {
 	sel, _ := json.Marshal(selector)
 	expr := fmt.Sprintf(`(() => {

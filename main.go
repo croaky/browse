@@ -21,6 +21,10 @@
 // still to render takes a wait before it. One wait has -wait, five
 // seconds by default, and the whole run has -timeout.
 //
+// There is no scroll action. click and hover scroll their
+// target to the center of the viewport before they act, so a capture
+// of a page scrolled part way hovers an element that far down.
+//
 // The viewport is 1280 by 900 at one device pixel per CSS pixel.
 // -phone is 390 by 844 at two, with a touch screen and a phone user
 // agent, for a page built for a phone first.
