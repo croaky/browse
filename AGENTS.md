@@ -109,8 +109,9 @@ what it acts on.
 
 Work happens on a sockeye change. `soc checkout` allocates one and
 prints a worktree; `soc edit` sets its title and description before
-the code. After a push, read the checks with
-`git push && soc show --wait`.
+the code. Push with `soc push --wait`, which waits for the checks. If `main` moved
+ahead, run `soc sync` to rebase the change, then `soc push --force`. A
+plain push after a sync stops and says so.
 
 ## Commits
 
