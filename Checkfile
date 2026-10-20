@@ -26,3 +26,7 @@ deadcode: go run golang.org/x/tools/cmd/deadcode@v0.45.0 -h >/dev/null 2>&1; go 
 
 # dprint wraps Markdown at 72, the same column the commits use.
 fmt: dprint check
+
+# The title a change needs to merge, and the body rules that come
+# with it. sockeye reads this from main at merge.
+merge: ^[a-z][a-z0-9_/-]*(?:, ?[a-z][a-z0-9_/-]*)*: [a-z](?:.{2,62})?(?:[^.\s]|\.\.\.)$
