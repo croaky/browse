@@ -56,12 +56,19 @@ func writeGIF(w io.Writer, frames []frame, end float64) error {
 // width with the nearest pixel, and paints white below a src that is
 // short.
 //
-// The palette is the 256 colors the frame uses most, with no
-// dithering. A page is mostly flat color, so its background, text,
-// and borders keep their exact colors. Each other color, such as an
-// edge pixel of anti-aliased text, takes the nearest palette color. A
-// fixed palette such as Plan 9 holds few of a page's colors, and it
-// puts a colored halo around text. A gradient or a photo shows bands.
+// The palette has 256 colors, with no dithering. The first 128 are the
+// colors the frame uses most. A page is mostly flat color, so its
+// background, text, and borders keep their exact colors. A fixed
+// palette such as Plan 9 holds few of a page's colors, and it puts a
+// colored halo around text.
+//
+// The other 128 are for the rest of the pixels. Each one is the mean
+// of a group of similar colors, a group for each 16 steps of each
+// channel, and the groups with the most pixels get a slot. A small
+// photo, such as an avatar, spreads over many colors that each cover
+// few pixels. With only the most used colors, none of them gets a slot,
+// and the photo turns grey. Each pixel takes the nearest palette
+// color, so a gradient or a large photo shows bands.
 func paletted(src image.Image, w, h int) *image.Paletted {
 	b := src.Bounds()
 	px := make([]color.RGBA, w*h)
@@ -78,12 +85,36 @@ func paletted(src image.Image, w, h int) *image.Paletted {
 			count[c]++
 		}
 	}
+	// The ties break on the color, so a frame always gets the same
+	// palette.
 	used := slices.SortedFunc(maps.Keys(count), func(a, b color.RGBA) int {
-		return cmp.Compare(count[b], count[a])
+		return cmp.Or(cmp.Compare(count[b], count[a]), cmp.Compare(rgb(a), rgb(b)))
 	})
 	pal := make(color.Palette, 0, 256)
-	for _, c := range used[:min(256, len(used))] {
+	for _, c := range used[:min(128, len(used))] {
 		pal = append(pal, c)
+	}
+	type group struct{ n, r, g, b int }
+	groups := map[uint32]*group{}
+	for _, c := range used[len(pal):] {
+		k := rgb(c) & 0xf0f0f0
+		gr := groups[k]
+		if gr == nil {
+			gr = &group{}
+			groups[k] = gr
+		}
+		n := count[c]
+		gr.n += n
+		gr.r += n * int(c.R)
+		gr.g += n * int(c.G)
+		gr.b += n * int(c.B)
+	}
+	keys := slices.SortedFunc(maps.Keys(groups), func(a, b uint32) int {
+		return cmp.Or(cmp.Compare(groups[b].n, groups[a].n), cmp.Compare(a, b))
+	})
+	for _, k := range keys[:min(256-len(pal), len(keys))] {
+		gr := groups[k]
+		pal = append(pal, color.RGBA{uint8(gr.r / gr.n), uint8(gr.g / gr.n), uint8(gr.b / gr.n), 0xff})
 	}
 	// Each color searches the palette once, not once for each pixel.
 	index := map[color.RGBA]uint8{}
@@ -97,4 +128,9 @@ func paletted(src image.Image, w, h int) *image.Paletted {
 		dst.Pix[i] = k
 	}
 	return dst
+}
+
+// rgb packs a color into 0xRRGGBB.
+func rgb(c color.RGBA) uint32 {
+	return uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B)
 }

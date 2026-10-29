@@ -198,12 +198,14 @@ as the PNG does. It holds one second before the GIF plays again. The
 GIF is the size of the PNG, and a screencast frame of another size
 scales to that width.
 
-Each GIF frame has its own palette: the 256 colors the frame uses
-most, with no dithering. A page is mostly flat color, so its
-background, text, and borders keep their exact colors. A JPEG frame or
-a fixed palette such as Plan 9 puts a colored halo around text.
-Dithering adds noise that changes from frame to frame. A gradient or a
-photo shows bands.
+Each GIF frame has its own palette of 256 colors, with no dithering.
+Half are the colors the frame uses most, so the page's background,
+text, and borders keep their exact colors. The other half are the
+means of groups of similar colors among the rest of the pixels, so a
+small photo such as an avatar keeps its hue. A JPEG frame or a fixed
+palette such as Plan 9 puts a colored halo around text. Dithering adds
+noise that changes from frame to frame. A gradient or a large photo
+shows bands.
 
 Headless Chrome draws no pointer, so a click or a hover shows only by
 what it changes on the page.

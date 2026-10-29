@@ -145,6 +145,25 @@ func TestWriteGIF(t *testing.T) {
 	is.NoErr(err)
 	is.Eq(color.RGBAModel.Convert(g.Image[0].At(0, 0)), color.Color(navy))
 
+	// A rare color keeps a slot. 300 greys of 10 pixels each fill more
+	// than 256 slots, and 5 red pixels, as in a small avatar, follow.
+	img := image.NewRGBA(image.Rect(0, 0, 3005, 1))
+	for i := range 3000 {
+		v := uint8(i / 10 / 2)
+		img.Set(i, 0, color.RGBA{v, v, v + uint8(i/10%2), 0xff})
+	}
+	red := color.RGBA{0xd0, 0x20, 0x20, 0xff}
+	for i := 3000; i < 3005; i++ {
+		img.Set(i, 0, red)
+	}
+	var enc bytes.Buffer
+	is.NoErr(png.Encode(&enc, img))
+	buf.Reset()
+	is.NoErr(writeGIF(&buf, []frame{{PNG: enc.Bytes(), At: 1}}, 2))
+	g, err = gif.DecodeAll(&buf)
+	is.NoErr(err)
+	is.Eq(color.RGBAModel.Convert(g.Image[0].At(3004, 0)), color.Color(red))
+
 	// Frames of other sizes fit the last frame's canvas. A headful
 	// Chrome sends 1280 by 813 frames for a 1280 by 900 viewport, and
 	// a frame at half the width is one at a lower device scale.
