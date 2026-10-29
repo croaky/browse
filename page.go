@@ -324,11 +324,13 @@ func (p *page) screenshot(ctx context.Context, full bool) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(res.Data)
 }
 
-// frame is one screencast frame: a JPEG, and the time Chrome painted
-// it in seconds since the Unix epoch.
+// frame is one screencast frame: a PNG, and the time Chrome painted
+// it in seconds since the Unix epoch. A PNG and not a JPEG, because a
+// JPEG blurs the edges of text, and the GIF palette then puts a
+// colored halo around each letter.
 type frame struct {
-	JPEG []byte
-	At   float64
+	PNG []byte
+	At  float64
 }
 
 // screencast is a recording of a tab. Chrome sends a frame each time
@@ -376,10 +378,10 @@ func (p *page) startScreencast(ctx context.Context) (*screencast, error) {
 			if err != nil {
 				continue
 			}
-			s.frames = append(s.frames, frame{JPEG: data, At: ev.Metadata.Timestamp})
+			s.frames = append(s.frames, frame{PNG: data, At: ev.Metadata.Timestamp})
 		}
 	}()
-	if err := p.call(ctx, "Page.startScreencast", map[string]any{"format": "jpeg", "quality": 90}, nil); err != nil {
+	if err := p.call(ctx, "Page.startScreencast", map[string]any{"format": "png"}, nil); err != nil {
 		close(s.stop)
 		<-s.done
 		st.close()
@@ -405,18 +407,12 @@ func (s *screencast) finish(ctx context.Context) ([]frame, float64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	var res struct {
-		Data string `json:"data"`
-	}
-	if err := s.p.call(ctx, "Page.captureScreenshot", map[string]any{"format": "jpeg", "quality": 90}, &res); err != nil {
-		return nil, 0, err
-	}
-	at := float64(time.Now().UnixNano()) / 1e9
-	data, err := base64.StdEncoding.DecodeString(res.Data)
+	data, err := s.p.screenshot(ctx, false)
 	if err != nil {
 		return nil, 0, err
 	}
-	return append(s.frames, frame{JPEG: data, At: at}), at + 1, nil
+	at := float64(time.Now().UnixNano()) / 1e9
+	return append(s.frames, frame{PNG: data, At: at}), at + 1, nil
 }
 
 // action is one step between the load and the screenshot.

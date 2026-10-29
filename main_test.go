@@ -6,7 +6,6 @@ import (
 	"image/color"
 	"image/draw"
 	"image/gif"
-	"image/jpeg"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
@@ -113,19 +112,19 @@ func TestParseHeaders(t *testing.T) {
 func TestWriteGIF(t *testing.T) {
 	is := is.New(t)
 
-	jpg := func(c color.Color) []byte {
-		img := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	sized := func(w, h int, c color.Color) []byte {
+		img := image.NewRGBA(image.Rect(0, 0, w, h))
 		draw.Draw(img, img.Bounds(), &image.Uniform{c}, image.Point{}, draw.Src)
 		var buf bytes.Buffer
-		is.NoErr(jpeg.Encode(&buf, img, nil))
+		is.NoErr(png.Encode(&buf, img))
 		return buf.Bytes()
 	}
 	// Each frame shows until the next one, and the last until end. A
 	// gap below 20ms writes the shortest delay a browser honors.
 	frames := []frame{
-		{JPEG: jpg(color.White), At: 100},
-		{JPEG: jpg(color.Black), At: 100.5},
-		{JPEG: jpg(color.White), At: 100.505},
+		{PNG: sized(4, 3, color.White), At: 100},
+		{PNG: sized(4, 3, color.Black), At: 100.5},
+		{PNG: sized(4, 3, color.White), At: 100.505},
 	}
 	var buf bytes.Buffer
 	is.NoErr(writeGIF(&buf, frames, 101.505))
@@ -135,24 +134,25 @@ func TestWriteGIF(t *testing.T) {
 	is.Eq(g.Image[0].Bounds().Dx(), 4)
 	is.Eq(g.Image[0].Bounds().Dy(), 3)
 
-	// A frame that is not a JPEG is an error.
-	is.HasErr(writeGIF(&buf, []frame{{JPEG: []byte("no"), At: 1}}, 2))
+	// A frame that is not a PNG is an error.
+	is.HasErr(writeGIF(&buf, []frame{{PNG: []byte("no"), At: 1}}, 2))
+
+	// A page color that no fixed palette holds keeps its exact value.
+	navy := color.RGBA{0x0b, 0x1f, 0x6b, 0xff}
+	buf.Reset()
+	is.NoErr(writeGIF(&buf, []frame{{PNG: sized(4, 3, navy), At: 1}}, 2))
+	g, err = gif.DecodeAll(&buf)
+	is.NoErr(err)
+	is.Eq(color.RGBAModel.Convert(g.Image[0].At(0, 0)), color.Color(navy))
 
 	// Frames of other sizes fit the last frame's canvas. A headful
 	// Chrome sends 1280 by 813 frames for a 1280 by 900 viewport, and
 	// a frame at half the width is one at a lower device scale.
-	sized := func(w, h int, c color.Color) []byte {
-		img := image.NewRGBA(image.Rect(0, 0, w, h))
-		draw.Draw(img, img.Bounds(), &image.Uniform{c}, image.Point{}, draw.Src)
-		var buf bytes.Buffer
-		is.NoErr(jpeg.Encode(&buf, img, nil))
-		return buf.Bytes()
-	}
 	buf.Reset()
 	is.NoErr(writeGIF(&buf, []frame{
-		{JPEG: sized(8, 5, color.Black), At: 1},
-		{JPEG: sized(4, 3, color.Black), At: 2},
-		{JPEG: sized(8, 6, color.Black), At: 3},
+		{PNG: sized(8, 5, color.Black), At: 1},
+		{PNG: sized(4, 3, color.Black), At: 2},
+		{PNG: sized(8, 6, color.Black), At: 3},
 	}, 4))
 	g, err = gif.DecodeAll(&buf)
 	is.NoErr(err)

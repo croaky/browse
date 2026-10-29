@@ -185,7 +185,7 @@ use user namespaces. Chromium explains the trade-off in
 
 ## The video
 
-`-video` uses Chrome's screencast. Chrome sends a JPEG each time the
+`-video` uses Chrome's screencast. Chrome sends a PNG each time the
 page paints, with a timestamp, and `browse` acks each frame. Each
 frame shows until the next paint, so a page that does not change is
 one frame held, and a `sleep` after a transition shows the transition
@@ -198,9 +198,12 @@ as the PNG does. It holds one second before the GIF plays again. The
 GIF is the size of the PNG, and a screencast frame of another size
 scales to that width.
 
-The GIF uses the standard library's Plan 9 palette with no dithering.
-A page is mostly flat color, and dithering adds noise that changes
-from frame to frame. A gradient or a photo shows bands.
+Each GIF frame has its own palette: the 256 colors the frame uses
+most, with no dithering. A page is mostly flat color, so its
+background, text, and borders keep their exact colors. A JPEG frame or
+a fixed palette such as Plan 9 puts a colored halo around text.
+Dithering adds noise that changes from frame to frame. A gradient or a
+photo shows bands.
 
 Headless Chrome draws no pointer, so a click or a hover shows only by
 what it changes on the page.
