@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,6 +29,8 @@ type chrome struct {
 	dataDir string
 	w       io.WriteCloser
 	r       *bufio.Reader
+	stderr  *stderrTail
+	exited  chan struct{}
 
 	mu      sync.Mutex
 	nextID  int
@@ -53,12 +57,48 @@ type cdpError struct {
 	Message string `json:"message"`
 }
 
-// subscription is one caller waiting for one event on one session.
-// The reader closes ch on the first match and drops the subscription.
+// subscription is one caller waiting for an event on one session.
+// A one-shot subscription has ch: the reader sends the first match on
+// it, closes it, and drops the subscription. A stream has ready: the
+// reader adds each match to queue and signals ready.
 type subscription struct {
 	method    string
 	sessionID string
 	ch        chan json.RawMessage
+	ready     chan struct{}
+	queue     []json.RawMessage
+}
+
+// stderrTail keeps the last 4 KB that Chrome writes to stderr. When
+// Chrome exits at start, the reason is there, and the connection
+// error shows only EOF.
+type stderrTail struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+func (t *stderrTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.b = append(t.b, p...)
+	if len(t.b) > 4096 {
+		t.b = t.b[len(t.b)-4096:]
+	}
+	return len(p), nil
+}
+
+// reason is Chrome's last FATAL line, or else its last line. It is ""
+// when Chrome wrote nothing.
+func (t *stderrTail) reason() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	lines := strings.Split(strings.TrimSpace(string(t.b)), "\n")
+	for _, line := range slices.Backward(lines) {
+		if strings.Contains(line, "FATAL") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // chromePath finds the browser. The flag wins, then BROWSE_CHROME, then
@@ -113,7 +153,8 @@ func launch(ctx context.Context, path string, width, height int) (*chrome, error
 	)
 	cmd.ExtraFiles = []*os.File{toChromeR, fromChromeW}
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	stderr := &stderrTail{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(dataDir)
 		return nil, fmt.Errorf("start %s: %w", path, err)
@@ -128,9 +169,17 @@ func launch(ctx context.Context, path string, width, height int) (*chrome, error
 		dataDir: dataDir,
 		w:       toChromeW,
 		r:       bufio.NewReaderSize(fromChromeR, 1<<20),
+		stderr:  stderr,
+		exited:  make(chan struct{}),
 		pending: map[int]chan message{},
 		closed:  make(chan struct{}),
 	}
+	// Wait returns after Chrome exits and its stderr is copied, so
+	// exited also means stderr is complete.
+	go func() {
+		_ = cmd.Wait()
+		close(c.exited)
+	}()
 	go c.read()
 	return c, nil
 }
@@ -144,14 +193,26 @@ func (c *chrome) read() {
 	for {
 		raw, err := c.r.ReadBytes(0)
 		if err != nil {
+			// Give Chrome a moment to exit, so its last stderr line is
+			// in the error. A Chrome that fails at start says why there.
+			select {
+			case <-c.exited:
+			case <-time.After(2 * time.Second):
+			}
+			readErr := fmt.Errorf("chrome closed the connection: %w", err)
+			if reason := c.stderr.reason(); reason != "" {
+				readErr = fmt.Errorf("%w; chrome said: %s", readErr, reason)
+			}
 			c.mu.Lock()
-			c.readErr = fmt.Errorf("chrome closed the connection: %w", err)
+			c.readErr = readErr
 			for id, ch := range c.pending {
 				close(ch)
 				delete(c.pending, id)
 			}
 			for _, s := range c.subs {
-				close(s.ch)
+				if s.ch != nil {
+					close(s.ch)
+				}
 			}
 			c.subs = nil
 			c.mu.Unlock()
@@ -173,13 +234,24 @@ func (c *chrome) read() {
 		}
 		kept := c.subs[:0]
 		for _, s := range c.subs {
-			if s.method == m.Method && s.sessionID == m.SessionID {
-				params, _ := json.Marshal(m.Params)
-				s.ch <- params
-				close(s.ch)
+			if s.method != m.Method || s.sessionID != m.SessionID {
+				kept = append(kept, s)
 				continue
 			}
-			kept = append(kept, s)
+			params, _ := json.Marshal(m.Params)
+			if s.ready != nil {
+				// A stream never blocks the reader and never drops an
+				// event. Its caller keeps the queue short.
+				s.queue = append(s.queue, params)
+				select {
+				case s.ready <- struct{}{}:
+				default:
+				}
+				kept = append(kept, s)
+				continue
+			}
+			s.ch <- params
+			close(s.ch)
 		}
 		c.subs = kept
 		c.mu.Unlock()
@@ -207,7 +279,18 @@ func (c *chrome) call(ctx context.Context, sessionID, method string, params any,
 	}
 	raw = append(raw, 0)
 	if _, err := c.w.Write(raw); err != nil {
-		return fmt.Errorf("%s: write: %w", method, err)
+		// A Chrome that exited closes its end, so the write fails with
+		// a broken pipe. The reader's error says why Chrome exited, so
+		// wait for the reader and return that error.
+		select {
+		case <-c.closed:
+			c.mu.Lock()
+			readErr := c.readErr
+			c.mu.Unlock()
+			return fmt.Errorf("%s: %w", method, readErr)
+		case <-ctx.Done():
+			return fmt.Errorf("%s: write: %w", method, err)
+		}
 	}
 
 	select {
@@ -247,6 +330,57 @@ func (c *chrome) subscribe(method, sessionID string) <-chan json.RawMessage {
 	return s.ch
 }
 
+// stream receives every event named method on one session, in order.
+type stream struct {
+	c *chrome
+	s *subscription
+}
+
+// listen starts a stream. Like subscribe, start it before the call
+// that causes the events. The reader queues each event until next
+// reads it, so the caller must read about as fast as Chrome sends.
+func (c *chrome) listen(method, sessionID string) *stream {
+	s := &subscription{method: method, sessionID: sessionID, ready: make(chan struct{}, 1)}
+	c.mu.Lock()
+	c.subs = append(c.subs, s)
+	c.mu.Unlock()
+	return &stream{c: c, s: s}
+}
+
+// next returns the oldest event that is not read yet. It waits for
+// one, and returns false when stop closes or the connection ends.
+func (st *stream) next(stop <-chan struct{}) (json.RawMessage, bool) {
+	for {
+		st.c.mu.Lock()
+		if len(st.s.queue) > 0 {
+			raw := st.s.queue[0]
+			st.s.queue = st.s.queue[1:]
+			st.c.mu.Unlock()
+			return raw, true
+		}
+		st.c.mu.Unlock()
+		select {
+		case <-st.s.ready:
+		case <-stop:
+			return nil, false
+		case <-st.c.closed:
+			return nil, false
+		}
+	}
+}
+
+// close removes the stream. The reader then drops its events.
+func (st *stream) close() {
+	st.c.mu.Lock()
+	defer st.c.mu.Unlock()
+	for i, s := range st.c.subs {
+		if s == st.s {
+			st.c.subs = append(st.c.subs[:i], st.c.subs[i+1:]...)
+			return
+		}
+	}
+}
+
 // close asks Chrome to exit, waits a moment for it, kills it if it
 // stayed, waits for the reader to see the pipe close, and removes the
 // profile directory.
@@ -255,16 +389,11 @@ func (c *chrome) close() {
 	defer cancel()
 	_ = c.call(ctx, "", "Browser.close", nil, nil)
 	c.w.Close()
-	done := make(chan struct{})
-	go func() {
-		_ = c.cmd.Wait()
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-c.exited:
 	case <-ctx.Done():
 		_ = c.cmd.Process.Kill()
-		<-done
+		<-c.exited
 	}
 	<-c.closed
 	os.RemoveAll(c.dataDir)

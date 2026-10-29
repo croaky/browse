@@ -11,10 +11,12 @@ browse http://localhost:3000/help
 browse -phone http://localhost:3000/portfolio
 browse http://localhost:3000/companies/12 click=.tab:nth-child(2) wait=.drawer.active
 browse -full -out tmp/index.png http://localhost:3000/
+browse -steps -video tmp/search.gif http://localhost:3000/ 'type=#q:acme' wait=.results
 ```
 
-On success it prints the path it wrote and nothing else. On failure it
-prints why and exits 1. The default path is `<slug>.png` in the
+On success it prints each path it wrote, one per line, with the main
+PNG last, and nothing else. On failure it prints why and exits 1.
+The default path is `<slug>.png` in the
 current directory, from the URL path: `/help` is `help.png`,
 `/companies/12` is `companies-12.png`, and `/` is `index.png`.
 
@@ -78,6 +80,12 @@ visible after 5s`.
   it changes one dimension.
 - `-full`: capture the whole document, not the viewport.
 - `-out <path>`: where to write the PNG.
+- `-steps`: also write a PNG after each action, beside the main PNG.
+  `help.png` with two actions gives `help-1-click.png` and
+  `help-2-wait.png`. An agent that checks a flow can read each step.
+- `-video <path.gif>`: also write an animated GIF of the run, from the
+  first paint to the last action, at real speed. It is for a person:
+  an agent reads images, not motion.
 - `-chrome <path>`: a Chrome binary, instead of the pinned headless
   shell.
 - `-wait <duration>`: a limit for one `wait` action, default 5s.
@@ -135,6 +143,68 @@ drives the real browser through a cookie, a header, a pointer event,
 phone emulation, and a PNG decode. A bump is its own commit, with a
 laptop run of that test in the description.
 
+## Linux
+
+The headless shell needs shared libraries that a server image often
+leaves out. On Ubuntu 24.04:
+
+```sh
+sudo apt-get install -y libatk1.0-0t64 libatk-bridge2.0-0t64 libxcomposite1 \
+  libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2t64 libatspi2.0-0t64
+```
+
+Chrome's sandbox needs unprivileged user namespaces. Ubuntu 23.10 and
+later let AppArmor restrict them, so the shell stops at start with
+`No usable sandbox!`, and `browse` prints that line. Do not pass
+`--no-sandbox`, and do not turn the restriction off for the whole
+machine. Install the shell where only root can write, and allow user
+namespaces for that path only:
+
+```sh
+v=153.0.8010.47   # shellVersion in shell.go
+sudo mkdir -p /opt/chrome-headless-shell
+curl -fsSLO "https://storage.googleapis.com/chrome-for-testing-public/$v/linux64/chrome-headless-shell-linux64.zip"
+sudo unzip -q chrome-headless-shell-linux64.zip -d /tmp
+sudo mv /tmp/chrome-headless-shell-linux64 /opt/chrome-headless-shell/$v
+sudo tee /etc/apparmor.d/chrome-headless-shell >/dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile chrome-headless-shell /opt/chrome-headless-shell/*/chrome-headless-shell flags=(unconfined) {
+  userns,
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/chrome-headless-shell
+export BROWSE_CHROME=/opt/chrome-headless-shell/$v/chrome-headless-shell
+```
+
+The profile names the root-owned path, not the user cache. A profile
+for a path the user can write lets any program the user puts there
+use user namespaces. Chromium explains the trade-off in
+[AppArmor user namespace restrictions](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).
+
+## The video
+
+`-video` uses Chrome's screencast. Chrome sends a JPEG each time the
+page paints, with a timestamp, and `browse` acks each frame. Each
+frame shows until the next paint, so a page that does not change is
+one frame held, and a `sleep` after a transition shows the transition
+at its real speed. The first frame is the blank tab before the load.
+
+An action returns before Chrome paints its result, so the screencast
+alone can stop before the last action shows. The last frame is a
+screenshot after the last action instead, which waits for a new paint
+as the PNG does. It holds one second before the GIF plays again. The
+GIF is the size of the PNG, and a screencast frame of another size
+scales to that width.
+
+The GIF uses the standard library's Plan 9 palette with no dithering.
+A page is mostly flat color, and dithering adds noise that changes
+from frame to frame. A gradient or a photo shows bands.
+
+Headless Chrome draws no pointer, so a click or a hover shows only by
+what it changes on the page.
+
 ## No browser library
 
 The DevTools Protocol client is about 250 lines in `cdp.go`. It speaks
@@ -143,10 +213,10 @@ descriptors 3 and 4, each ended by a NUL byte. A pipe rather than a
 port, so two runs at once do not race for a port and nothing listens
 on the machine.
 
-The tool calls sixteen protocol methods. A library such as `chromedp`
+The tool calls nineteen protocol methods. A library such as `chromedp`
 brings generated bindings for the whole protocol, tens of megabytes in
 the module cache and a binary about 15 MB larger, and it tracks Chrome
-releases. Sixteen methods by hand is smaller than the import, and
+releases. Nineteen methods by hand is smaller than the import, and
 there is nothing to keep current.
 
 ## GitHub repo is a mirror

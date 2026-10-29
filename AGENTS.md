@@ -39,7 +39,7 @@ error message stay as they are.
 
 ## Architecture
 
-One `main` package at the repo root. Four files, one concern each:
+One `main` package at the repo root. Five files, one concern each:
 
 - `shell.go` pins a `chrome-headless-shell` version and downloads it
   into the user cache on the first run. It knows nothing about the
@@ -48,8 +48,10 @@ One `main` package at the repo root. Four files, one concern each:
   `--remote-debugging-pipe`. It knows message ids, sessions, and
   events. It knows no method by name.
 - `page.go` is one tab: viewport, cookies, headers, navigation, the
-  action vocabulary, and the screenshot. Every protocol method the
-  tool uses is named here.
+  action vocabulary, the screenshot, and the screencast. Every
+  protocol method the tool uses is named here.
+- `gif.go` encodes screencast frames as an animated GIF. It knows
+  nothing about the protocol.
 - `main.go` is the command line: flags, the environment, the output
   path, and the order of the run.
 

@@ -324,6 +324,101 @@ func (p *page) screenshot(ctx context.Context, full bool) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(res.Data)
 }
 
+// frame is one screencast frame: a JPEG, and the time Chrome painted
+// it in seconds since the Unix epoch.
+type frame struct {
+	JPEG []byte
+	At   float64
+}
+
+// screencast is a recording of a tab. Chrome sends a frame each time
+// the page paints, and sends no more until browse acks it.
+type screencast struct {
+	p      *page
+	st     *stream
+	stop   chan struct{}
+	done   chan struct{}
+	frames []frame
+}
+
+// startScreencast starts the recording. Start it before navigate, so
+// the recording shows the page load.
+//
+// Chrome sends a frame before the ack of the last one: the pinned
+// shell allows three frames in flight (kMaxScreencastFramesInFlight
+// in page_handler.cc). So a one-shot subscription for each frame can
+// miss one, and Chrome then waits for an ack that never comes. A
+// stream queues every frame, and the queue holds three at most.
+func (p *page) startScreencast(ctx context.Context) (*screencast, error) {
+	st := p.c.listen("Page.screencastFrame", p.sessionID)
+	s := &screencast{p: p, st: st, stop: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(s.done)
+		for {
+			raw, ok := st.next(s.stop)
+			if !ok {
+				return
+			}
+			// The sessionId in these params is the frame number to ack,
+			// not the session of the tab.
+			var ev struct {
+				Data     string `json:"data"`
+				Frame    int    `json:"sessionId"`
+				Metadata struct {
+					Timestamp float64 `json:"timestamp"`
+				} `json:"metadata"`
+			}
+			if json.Unmarshal(raw, &ev) != nil {
+				continue
+			}
+			_ = p.call(ctx, "Page.screencastFrameAck", map[string]any{"sessionId": ev.Frame}, nil)
+			data, err := base64.StdEncoding.DecodeString(ev.Data)
+			if err != nil {
+				continue
+			}
+			s.frames = append(s.frames, frame{JPEG: data, At: ev.Metadata.Timestamp})
+		}
+	}()
+	if err := p.call(ctx, "Page.startScreencast", map[string]any{"format": "jpeg", "quality": 90}, nil); err != nil {
+		close(s.stop)
+		<-s.done
+		st.close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// finish stops the recording and returns its frames, and the time the
+// last frame holds until.
+//
+// An action call returns before Chrome paints its result, and Chrome
+// sends no frame for a page that does not change. So the screencast
+// alone can end before the last action shows, or hold no frame at all.
+// The last frame is a screenshot instead: Page.captureScreenshot waits
+// for a new paint, as the final PNG does. It holds one second, so a
+// person sees the end state before the GIF plays again.
+func (s *screencast) finish(ctx context.Context) ([]frame, float64, error) {
+	err := s.p.call(ctx, "Page.stopScreencast", nil, nil)
+	close(s.stop)
+	<-s.done
+	s.st.close()
+	if err != nil {
+		return nil, 0, err
+	}
+	var res struct {
+		Data string `json:"data"`
+	}
+	if err := s.p.call(ctx, "Page.captureScreenshot", map[string]any{"format": "jpeg", "quality": 90}, &res); err != nil {
+		return nil, 0, err
+	}
+	at := float64(time.Now().UnixNano()) / 1e9
+	data, err := base64.StdEncoding.DecodeString(res.Data)
+	if err != nil {
+		return nil, 0, err
+	}
+	return append(s.frames, frame{JPEG: data, At: at}), at + 1, nil
+}
+
 // action is one step between the load and the screenshot.
 type action struct {
 	Name string
@@ -387,13 +482,14 @@ func parseActions(args []string) ([]action, error) {
 
 // run performs the actions in order. An error names the action that
 // failed, so a list of five says which one. wait is the budget for
-// one wait action.
+// one wait action. after, when not nil, runs after each action, with
+// the action's index from 0.
 //
 // click, hover, and type do not wait: each acts on the element that
 // is there now, and no match is an error at once. A step that needs
 // an element the page has still to render takes a wait before it.
-func (p *page) run(ctx context.Context, actions []action, wait time.Duration) error {
-	for _, a := range actions {
+func (p *page) run(ctx context.Context, actions []action, wait time.Duration, after func(int, action) error) error {
+	for i, a := range actions {
 		var err error
 		switch a.Name {
 		case "click":
@@ -414,6 +510,9 @@ func (p *page) run(ctx context.Context, actions []action, wait time.Duration) er
 			}
 		default:
 			err = errors.New("unknown action")
+		}
+		if err == nil && after != nil {
+			err = after(i, a)
 		}
 		if err != nil {
 			return fmt.Errorf("%s=%s: %w", a.Name, a.Arg, err)

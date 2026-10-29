@@ -41,11 +41,18 @@
 // directory that the run removes, so no cookie or history of the
 // user's own is read or written.
 //
-// On success it prints the path it wrote and nothing else. On failure
-// it prints why and exits 1.
+// -steps writes a PNG after each action, beside the main PNG:
+// help-1-click.png, help-2-wait.png. -video <path.gif> writes an
+// animated GIF of the run at real speed, from the first paint to the
+// last action.
+//
+// On success it prints each path it wrote, one per line, with the
+// main PNG last, and nothing else. On failure it prints why and exits
+// 1.
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -90,6 +97,8 @@ func run(args []string) error {
 	phone := fs.Bool("phone", false, "a phone: 390 by 844 at 2x, touch, and a mobile user agent")
 	full := fs.Bool("full", false, "capture the whole document, not the viewport")
 	out := fs.String("out", "", "PNG path; default is <slug>.png from the URL path")
+	steps := fs.Bool("steps", false, "also write a PNG after each action: <slug>-<n>-<action>.png")
+	video := fs.String("video", "", "also write an animated GIF of the run to this path")
 	chromeFlag := fs.String("chrome", "", "a Chrome binary, instead of the pinned headless shell")
 	timeout := fs.Duration("timeout", 30*time.Second, "limit for the whole run")
 	wait := fs.Duration("wait", 5*time.Second, "limit for one wait action")
@@ -116,6 +125,9 @@ func run(args []string) error {
 	headers, err := parseHeaders(os.Getenv("BROWSE_HEADER"))
 	if err != nil {
 		return err
+	}
+	if *video != "" && strings.ToLower(filepath.Ext(*video)) != ".gif" {
+		return fmt.Errorf("-video %q: want a path that ends in .gif", *video)
 	}
 	outPath := *out
 	if outPath == "" {
@@ -161,26 +173,73 @@ func run(args []string) error {
 	if err := p.setHeaders(ctx, headers); err != nil {
 		return err
 	}
+	var cast *screencast
+	if *video != "" {
+		if cast, err = p.startScreencast(ctx); err != nil {
+			return err
+		}
+	}
 	if err := p.navigate(ctx, rawURL); err != nil {
 		return err
 	}
-	if err := p.run(ctx, actions, *wait); err != nil {
+
+	// The paths print only after the run succeeds, so a failed run
+	// prints its error and nothing else.
+	var wrote []string
+	var after func(int, action) error
+	if *steps {
+		base := strings.TrimSuffix(outPath, filepath.Ext(outPath))
+		after = func(i int, a action) error {
+			png, err := p.screenshot(ctx, *full)
+			if err != nil {
+				return err
+			}
+			path := fmt.Sprintf("%s-%d-%s.png", base, i+1, a.Name)
+			wrote = append(wrote, path)
+			return writeFile(path, png)
+		}
+	}
+	if err := p.run(ctx, actions, *wait, after); err != nil {
 		return err
 	}
+
+	if cast != nil {
+		frames, end, err := cast.finish(ctx)
+		if err != nil {
+			return err
+		}
+		var buf bytes.Buffer
+		if err := writeGIF(&buf, frames, end); err != nil {
+			return fmt.Errorf("-video: %w", err)
+		}
+		wrote = append(wrote, *video)
+		if err := writeFile(*video, buf.Bytes()); err != nil {
+			return err
+		}
+	}
+
 	png, err := p.screenshot(ctx, *full)
 	if err != nil {
 		return err
 	}
-	if dir := filepath.Dir(outPath); dir != "." {
+	wrote = append(wrote, outPath)
+	if err := writeFile(outPath, png); err != nil {
+		return err
+	}
+	for _, path := range wrote {
+		fmt.Println(path)
+	}
+	return nil
+}
+
+// writeFile writes data to path and makes its directory first.
+func writeFile(path string, data []byte) error {
+	if dir := filepath.Dir(path); dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	if err := os.WriteFile(outPath, png, 0o644); err != nil {
-		return err
-	}
-	fmt.Println(outPath)
-	return nil
+	return os.WriteFile(path, data, 0o644)
 }
 
 // parseCookies reads BROWSE_COOKIE: name=value pairs separated by
