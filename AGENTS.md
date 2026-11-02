@@ -138,6 +138,23 @@ the code. Push with `soc push --wait`, which waits for the checks. If `main` mov
 ahead, run `soc sync` to rebase the change, then `soc push --force`. A
 plain push after a sync stops and says so.
 
+## Releases
+
+browse has no tags. A user installs a commit on `main` by its Go
+pseudo-version. croaky/laptop pins one in `laptop.sh`, and each run of
+`laptop.sh` installs that build over the one in `~/go/bin`. A stale pin
+puts back an older build and takes away the newer actions and flags.
+
+After a merge that changes the binary, bump the pin in a laptop change.
+Read the pseudo-version of the merge commit:
+
+```sh
+go list -m -f '{{.Version}}' github.com/croaky/browse@<commit>
+```
+
+Put it in the `go install github.com/croaky/browse@...` line of
+`laptop.sh`. A merge that changes only docs or checks needs no bump.
+
 ## Commits
 
 - Prefix with what the change acts on: `cdp:`, `page:`, `cli:`, `doc:`,
