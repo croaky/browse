@@ -18,14 +18,17 @@ hints: git ls-files -z '*.go' | xargs -0 gopls check -severity=hint | awk '1; EN
 
 # deadcode -test roots at the test binaries as well as main, so a
 # helper only a skipped test reaches still counts as reached.
-# The first go tool builds deadcode and discards everything it prints,
-# so a line from the build does not count as dead code.
-deadcode: go tool deadcode -h >/dev/null 2>&1; go tool deadcode -test ./... 2>&1 | awk '1; END { exit (NR > 0) }'
+# go tool -n builds deadcode and prints only its path, so a line from
+# the build does not count as dead code.
+deadcode: go tool -n deadcode >/dev/null && go tool deadcode -test ./... 2>&1 | awk '1; END { exit (NR > 0) }'
 
 # dprint wraps Markdown at 72, the same column the commits use.
 fmt: dprint check
 
-weekly_govulncheck: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+# A tool line in go.mod pins govulncheck. It reads the live
+# vulnerability database, so a new advisory fails this check without a
+# commit.
+weekly_govulncheck: go tool govulncheck ./...
 
 # The title a change needs to merge, and the body rules that come
 # with it. sockeye reads this from main at merge.

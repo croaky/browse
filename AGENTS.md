@@ -72,18 +72,28 @@ the README, and one assertion in `TestParseActions`.
 
 ## Checks
 
-Pin every tool a check runs. Declare it with `go get -tool` so
-`go.mod` and `go.sum` hold its version, and run it as
-`go tool <name>`. Do not use `@latest` in a `Checkfile`, a script, or
-CI. A moving version makes the same commit pass one week and fail the
-next, and it runs new tool code nobody reviewed. A pinned tool changes
-in a change, where the diff shows the update and CI runs it. The
-sockeye runner fetches only the modules that `go.mod` names, and it
-runs each check with `GOPROXY=off`. So a `go run pkg@version` fails
-there. Pin the tool, not its
-data. `govulncheck` reads the live vulnerability database on every run,
-so the weekly scan still finds advisories published after the commit.
-Never vendor or cache that data.
+Pin every tool a check runs. Declare it with
+`go get -tool <pkg>@<version>`, so `go.mod` and `go.sum` hold its
+version and checksum, and run it as `go tool <name>`. Do not run
+`go run pkg@latest` or `go install pkg@latest` in a `Checkfile`, a
+script, or CI. A moving version makes the same commit pass one week
+and fail the next, and it runs new tool code nobody reviewed. A pinned
+tool changes in a change, where the diff shows the update and CI runs
+it. The sockeye runner fetches only the modules that `go.mod` and a
+`tools.mod` name, and it runs each check with `GOPROXY=off`. So a
+`go run pkg@version` fails there.
+
+Keep the `tool` lines in `go.mod`, because no module requires browse.
+A `go get -tool` can raise a requirement, and the build then links the
+newer version. Keep the raise only when the tests pass and nothing
+holds the old version on purpose. Otherwise, and in a library, put the
+tools in a `tools.mod` and run them as
+`go tool -modfile=tools.mod <name>`. The hml and uni repos show that
+form.
+
+Pin the tool, not its data. `govulncheck` reads the live vulnerability
+database on every run, so the weekly scan still finds advisories
+published after the commit. Never vendor or cache that data.
 
 The root `Checkfile` is the list, and CI runs it on every push. Run
 the same things before committing:
