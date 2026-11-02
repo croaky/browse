@@ -32,13 +32,17 @@ Actions run in order after the page loads and before the screenshot:
 - `hover=<selector>` moves the pointer over the first match and leaves
   it there, so a `:hover` rule is in effect.
 - `type=<selector>:<text>` focuses the first match and types the text.
+- `select=<selector>:<value>` picks the option of the first match whose
+  value, or else whose label, is the text, and fires `input` and
+  `change`. A `click` cannot do it: the headless shell draws no option
+  popup.
 - `wait=<selector>` waits until a match is on the page and visible.
 - `sleep=<duration>` waits a fixed time, for a transition the DOM does
   not signal.
 
-The first colon in a `type` argument divides the selector from the
-text. A selector holds a colon in a pseudo-class, so write that colon
-as `\:`:
+The first colon in a `type` or `select` argument divides the selector
+from the text. A selector holds a colon in a pseudo-class, so write
+that colon as `\:`:
 
 ```sh
 browse http://localhost:3000/ 'type=li\:nth-child(2):hello'
@@ -47,9 +51,10 @@ browse http://localhost:3000/ 'type=li\:nth-child(2):hello'
 The text needs no escape, because only the first colon divides:
 `type=#at:12:30` types `12:30`.
 
-Only `wait` waits. `click`, `hover`, and `type` act on the element
-that is there now, and no match is an error at once. A step that needs
-an element the page has still to render takes a `wait` before it.
+Only `wait` waits. `click`, `hover`, `type`, and `select` act on the
+element that is there now, and no match is an error at once. A step
+that needs an element the page has still to render takes a `wait`
+before it.
 `browse` retries no action: a click that needs a retry needs a `wait`.
 
 There is no scroll action. `click` and `hover` scroll their

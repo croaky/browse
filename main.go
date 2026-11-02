@@ -6,20 +6,21 @@
 //
 // Actions run in order after the page loads and before the screenshot:
 //
-//	click=<selector>       click the first match
-//	hover=<selector>       move the pointer over the first match
-//	type=<selector>:<text> focus the first match and type text
-//	wait=<selector>        wait until a match is visible
-//	sleep=<duration>       wait a fixed time, for a transition
+//	click=<selector>          click the first match
+//	hover=<selector>          move the pointer over the first match
+//	type=<selector>:<text>    focus the first match and type text
+//	select=<selector>:<value> pick the option with this value or label
+//	wait=<selector>           wait until a match is visible
+//	sleep=<duration>          wait a fixed time, for a transition
 //
-// The first colon in a type argument divides the selector from the
-// text. Write a colon in the selector as \: , as in
+// The first colon in a type or select argument divides the selector
+// from the text. Write a colon in the selector as \: , as in
 // type=li\:nth-child(2):hello. The text needs no escape.
 //
-// click, hover, and type act on the element that is there now, and no
-// match is an error at once. A step that needs an element the page has
-// still to render takes a wait before it. One wait has -wait, five
-// seconds by default, and the whole run has -timeout.
+// click, hover, type, and select act on the element that is there
+// now, and no match is an error at once. A step that needs an element
+// the page has still to render takes a wait before it. One wait has
+// -wait, five seconds by default, and the whole run has -timeout.
 //
 // There is no scroll action. click and hover scroll their
 // target to the center of the viewport before they act, so a capture
@@ -77,10 +78,11 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintf(fs.Output(), "  click=<selector>        click the first match\n")
 	fmt.Fprintf(fs.Output(), "  hover=<selector>        move the pointer over the first match\n")
 	fmt.Fprintf(fs.Output(), "  type=<selector>:<text>  focus the first match and type text\n")
+	fmt.Fprintf(fs.Output(), "  select=<selector>:<v>   pick the option whose value or label is v\n")
 	fmt.Fprintf(fs.Output(), "  wait=<selector>         wait until a match is visible\n")
 	fmt.Fprintf(fs.Output(), "  sleep=<duration>        wait a fixed time\n\n")
-	fmt.Fprintf(fs.Output(), "The first colon in a type argument divides the selector from the\n")
-	fmt.Fprintf(fs.Output(), "text. Write a colon in the selector as \\: .\n\n")
+	fmt.Fprintf(fs.Output(), "The first colon in a type or select argument divides the selector\n")
+	fmt.Fprintf(fs.Output(), "from the text. Write a colon in the selector as \\: .\n\n")
 	fmt.Fprintf(fs.Output(), "environment:\n")
 	fmt.Fprintf(fs.Output(), "  BROWSE_COOKIE  cookies for the URL's host: name=value; name2=value2\n")
 	fmt.Fprintf(fs.Output(), "  BROWSE_HEADER  headers on every request, one per line: Name: value\n")

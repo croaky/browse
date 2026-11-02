@@ -72,13 +72,15 @@ the README, and one assertion in `TestParseActions`.
 
 ## Checks
 
-Pin every tool a check runs. Name its version in the command, as in
-`go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`. Do not use
-`@latest` in a `Checkfile`, a script, or CI. A moving version makes the
-same commit pass one week and fail the next, and it runs new tool code
-nobody reviewed. A pinned tool changes in a change, where the diff shows
-the update and CI runs it. This module keeps tools out of `go.mod` so
-its dependency list stays what its users need. Pin the tool, not its
+Pin every tool a check runs. Declare it with `go get -tool` so
+`go.mod` and `go.sum` hold its version, and run it as
+`go tool <name>`. Do not use `@latest` in a `Checkfile`, a script, or
+CI. A moving version makes the same commit pass one week and fail the
+next, and it runs new tool code nobody reviewed. A pinned tool changes
+in a change, where the diff shows the update and CI runs it. The
+sockeye runner fetches only the modules that `go.mod` names, and it
+runs each check with `GOPROXY=off`. So a `go run pkg@version` fails
+there. Pin the tool, not its
 data. `govulncheck` reads the live vulnerability database on every run,
 so the weekly scan still finds advisories published after the commit.
 Never vendor or cache that data.
@@ -87,11 +89,11 @@ The root `Checkfile` is the list, and CI runs it on every push. Run
 the same things before committing:
 
 ```sh
-go run golang.org/x/tools/cmd/goimports@v0.45.0 -local "$(go list -m)" -w .
+go tool goimports -local "$(go list -m)" -w .
 go vet ./...
 go test -trimpath -buildvcs=false -race -cover ./...
 git ls-files -z '*.go' | xargs -0 gopls check -severity=hint
-go run golang.org/x/tools/cmd/deadcode@v0.45.0 -test ./...
+go tool deadcode -test ./...
 dprint fmt
 ```
 

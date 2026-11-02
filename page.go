@@ -259,6 +259,55 @@ func (p *page) typeText(ctx context.Context, selector, text string) error {
 	return p.call(ctx, "Input.insertText", map[string]any{"text": text}, nil)
 }
 
+// selectOption picks the option of a select element whose value, or
+// else whose label, is text, and fires input and change as a user's
+// pick does. A click cannot do this: it opens Chrome's native popup,
+// which the headless shell does not draw and a page cannot click, and
+// typed text does not reach a select.
+func (p *page) selectOption(ctx context.Context, selector, text string) error {
+	sel, _ := json.Marshal(selector)
+	want, _ := json.Marshal(text)
+	expr := fmt.Sprintf(`(() => {
+		const el = document.querySelector(%s);
+		if (!el) return {found: false};
+		const tag = el.tagName.toLowerCase();
+		if (tag !== "select") return {found: true, tag};
+		const opts = [...el.options];
+		const opt = opts.find(o => o.value === %[2]s) || opts.find(o => o.label.trim() === %[2]s);
+		if (!opt) return {found: true, tag, options: opts.map(o => ({value: o.value, label: o.label.trim()}))};
+		el.focus();
+		el.value = opt.value;
+		el.dispatchEvent(new Event("input", {bubbles: true}));
+		el.dispatchEvent(new Event("change", {bubbles: true}));
+		return {found: true, tag, picked: true};
+	})()`, sel, want)
+	var res struct {
+		Found   bool   `json:"found"`
+		Tag     string `json:"tag"`
+		Picked  bool   `json:"picked"`
+		Options []struct {
+			Value string `json:"value"`
+			Label string `json:"label"`
+		} `json:"options"`
+	}
+	if err := p.eval(ctx, expr, &res); err != nil {
+		return err
+	}
+	switch {
+	case !res.Found:
+		return fmt.Errorf("no element matches %q", selector)
+	case res.Tag != "select":
+		return fmt.Errorf("%q is <%s>, not <select>", selector, res.Tag)
+	case !res.Picked:
+		names := make([]string, len(res.Options))
+		for i, o := range res.Options {
+			names[i] = fmt.Sprintf("%q (%s)", o.Value, o.Label)
+		}
+		return fmt.Errorf("no option %q in %q; want a value or label of: %s", text, selector, strings.Join(names, ", "))
+	}
+	return nil
+}
+
 // waitFor polls until an element matches selector and has a box on
 // the page, or budget runs out. Presence alone is not enough: a
 // hidden element matches querySelector and shows nothing.
@@ -422,13 +471,13 @@ type action struct {
 }
 
 // actionNames is the vocabulary, in the order the usage prints it.
-var actionNames = []string{"click", "hover", "type", "wait", "sleep"}
+var actionNames = []string{"click", "hover", "type", "select", "wait", "sleep"}
 
-// splitType divides a type argument at the first colon a backslash
-// does not escape. A selector holds a colon in a pseudo-class, so
-// `\:` in the selector is one literal colon: type=li\:nth-child(2):hi
-// types "hi" into "li:nth-child(2)". The text needs no escape,
-// because only the first colon divides.
+// splitType divides a type or select argument at the first colon a
+// backslash does not escape. A selector holds a colon in a
+// pseudo-class, so `\:` in the selector is one literal colon:
+// type=li\:nth-child(2):hi types "hi" into "li:nth-child(2)". The text
+// needs no escape, because only the first colon divides.
 func splitType(arg string) (selector, text string, ok bool) {
 	var b strings.Builder
 	for i := 0; i < len(arg); i++ {
@@ -464,6 +513,10 @@ func parseActions(args []string) ([]action, error) {
 			if _, _, ok := splitType(arg); !ok {
 				return nil, fmt.Errorf(`action %q: want type=selector:text, with \: for a colon in the selector`, a)
 			}
+		case "select":
+			if _, _, ok := splitType(arg); !ok {
+				return nil, fmt.Errorf(`action %q: want select=selector:value, with \: for a colon in the selector`, a)
+			}
 		case "sleep":
 			if _, err := time.ParseDuration(arg); err != nil {
 				return nil, fmt.Errorf("action %q: %w", a, err)
@@ -481,9 +534,10 @@ func parseActions(args []string) ([]action, error) {
 // one wait action. after, when not nil, runs after each action, with
 // the action's index from 0.
 //
-// click, hover, and type do not wait: each acts on the element that
-// is there now, and no match is an error at once. A step that needs
-// an element the page has still to render takes a wait before it.
+// click, hover, type, and select do not wait: each acts on the
+// element that is there now, and no match is an error at once. A step
+// that needs an element the page has still to render takes a wait
+// before it.
 func (p *page) run(ctx context.Context, actions []action, wait time.Duration, after func(int, action) error) error {
 	for i, a := range actions {
 		var err error
@@ -495,6 +549,9 @@ func (p *page) run(ctx context.Context, actions []action, wait time.Duration, af
 		case "type":
 			sel, text, _ := splitType(a.Arg)
 			err = p.typeText(ctx, sel, text)
+		case "select":
+			sel, text, _ := splitType(a.Arg)
+			err = p.selectOption(ctx, sel, text)
 		case "wait":
 			err = p.waitFor(ctx, a.Arg, wait)
 		case "sleep":

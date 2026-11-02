@@ -47,6 +47,14 @@ func TestParseActions(t *testing.T) {
 
 	_, err = parseActions([]string{"sleep=soon"})
 	is.HasErr(err)
+
+	// select divides as type does.
+	got, err = parseActions([]string{"select=#rating:8"})
+	is.NoErr(err)
+	is.Eq(got[0], action{Name: "select", Arg: "#rating:8"})
+	_, err = parseActions([]string{"select=#rating"})
+	is.HasErr(err)
+	is.True(strings.Contains(err.Error(), "select=selector:value"))
 }
 
 func TestSplitType(t *testing.T) {
@@ -260,6 +268,10 @@ func TestBrowse(t *testing.T) {
 <button id="reveal" onclick="document.getElementById('box').style.display='block'">Reveal</button>
 <div id="box"></div>
 <input id="q">
+<select id="pick" onchange="document.getElementById('picked').style.display = this.value === 'b' ? 'block' : 'none'">
+<option value="">None</option><option value="a">Alpha</option><option value="b">Beta</option>
+</select>
+<div id="picked" style="display:none;width:10px;height:10px"></div>
 <div id="touch" style="display:none;width:10px;height:10px"></div>
 <script>if (navigator.maxTouchPoints > 0) document.getElementById('touch').style.display='block'</script>`))
 	}))
@@ -355,6 +367,23 @@ func TestBrowse(t *testing.T) {
 	err = run([]string{"-out", out, srv.URL + "/page", "click=#missing"})
 	is.HasErr(err)
 	is.True(strings.Contains(err.Error(), `click=#missing: no element matches "#missing"`))
+
+	// select picks an option by its value or its label, and fires
+	// change: #picked shows only when the page's handler sees "b".
+	err = run([]string{"-out", out, "-wait", "200ms", srv.URL + "/page", "select=#pick:b", "wait=#picked"})
+	is.NoErr(err)
+	err = run([]string{"-out", out, "-wait", "200ms", srv.URL + "/page", "select=#pick:Beta", "wait=#picked"})
+	is.NoErr(err)
+
+	// An option that is not there names the options that are.
+	err = run([]string{"-out", out, srv.URL + "/page", "select=#pick:c"})
+	is.HasErr(err)
+	is.True(strings.Contains(err.Error(), `select=#pick:c: no option "c" in "#pick"; want a value or label of: "" (None), "a" (Alpha), "b" (Beta)`))
+
+	// A match that is not a select says so.
+	err = run([]string{"-out", out, srv.URL + "/page", "select=#q:a"})
+	is.HasErr(err)
+	is.True(strings.Contains(err.Error(), `select=#q:a: "#q" is <input>, not <select>`))
 
 	// A wait spends its own budget, not the run's, and says how long
 	// it waited. #box is in the page but hidden until the click.

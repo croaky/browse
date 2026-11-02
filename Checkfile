@@ -8,11 +8,9 @@ test: go test -short -trimpath -buildvcs=false -race -cover ./...
 # goimports -l lists what it would rewrite, and a non-empty list is
 # the failure, since a CI job that rewrote source would have nowhere
 # to put it.
-# go run at a pinned version: the runner installs no goimports, and a
-# tool directive in go.mod would put x/tools in the module graph of
-# every module that requires this one. go run writes its download
-# lines to stderr, which out= does not read.
-lint: out=$(go run golang.org/x/tools/cmd/goimports@v0.45.0 -local "$(go list -m)" -l .); if [ -n "$out" ]; then echo "$out"; exit 1; fi; go vet ./...
+# go tool, from the tool lines in go.mod: the runner fetches only the
+# modules go.mod names, and runs each check with GOPROXY=off.
+lint: out=$(go tool goimports -local "$(go list -m)" -l .); if [ -n "$out" ]; then echo "$out"; exit 1; fi; go vet ./...
 
 # gopls at hint severity is what an editor underlines and nobody
 # reading a diff sees. It exits 0 either way, so awk reads the verdict.
@@ -20,9 +18,9 @@ hints: git ls-files -z '*.go' | xargs -0 gopls check -severity=hint | awk '1; EN
 
 # deadcode -test roots at the test binaries as well as main, so a
 # helper only a skipped test reaches still counts as reached.
-# The first go run builds deadcode and discards everything it prints,
-# so the "go: downloading" lines of a cold module cache do not count.
-deadcode: go run golang.org/x/tools/cmd/deadcode@v0.45.0 -h >/dev/null 2>&1; go run golang.org/x/tools/cmd/deadcode@v0.45.0 -test ./... 2>&1 | awk '1; END { exit (NR > 0) }'
+# The first go tool builds deadcode and discards everything it prints,
+# so a line from the build does not count as dead code.
+deadcode: go tool deadcode -h >/dev/null 2>&1; go tool deadcode -test ./... 2>&1 | awk '1; END { exit (NR > 0) }'
 
 # dprint wraps Markdown at 72, the same column the commits use.
 fmt: dprint check
