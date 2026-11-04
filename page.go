@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strings"
@@ -146,7 +147,7 @@ func (p *page) navigate(ctx context.Context, url string) error {
 func (p *page) eval(ctx context.Context, expr string, out any) error {
 	var res struct {
 		Result struct {
-			Value json.RawMessage `json:"value"`
+			Value jsontext.Value `json:"value"`
 		} `json:"result"`
 		ExceptionDetails *struct {
 			Text      string `json:"text"`
@@ -167,7 +168,7 @@ func (p *page) eval(ctx context.Context, expr string, out any) error {
 		return fmt.Errorf("javascript: %s", msg)
 	}
 	if out != nil && len(res.Result.Value) > 0 {
-		return json.Unmarshal(res.Result.Value, out)
+		return json.Unmarshal(res.Result.Value, out, lenient)
 	}
 	return nil
 }
@@ -184,7 +185,7 @@ type point struct {
 // says so: scrollIntoView also scrolls a scroll box inside the page,
 // so a hover on a row deep in a table shows that table scrolled.
 func (p *page) center(ctx context.Context, selector string) (point, error) {
-	sel, _ := json.Marshal(selector)
+	sel, _ := json.Marshal(selector, lenient)
 	expr := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%s);
 		if (!el) return null;
@@ -242,7 +243,7 @@ func (p *page) hover(ctx context.Context, selector string) error {
 // typeText focuses the element and inserts text as typed input, so
 // input and change handlers fire as they do for a keyboard.
 func (p *page) typeText(ctx context.Context, selector, text string) error {
-	sel, _ := json.Marshal(selector)
+	sel, _ := json.Marshal(selector, lenient)
 	expr := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%s);
 		if (!el) return false;
@@ -265,8 +266,8 @@ func (p *page) typeText(ctx context.Context, selector, text string) error {
 // which the headless shell does not draw and a page cannot click, and
 // typed text does not reach a select.
 func (p *page) selectOption(ctx context.Context, selector, text string) error {
-	sel, _ := json.Marshal(selector)
-	want, _ := json.Marshal(text)
+	sel, _ := json.Marshal(selector, lenient)
+	want, _ := json.Marshal(text, lenient)
 	expr := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%s);
 		if (!el) return {found: false};
@@ -316,7 +317,7 @@ func (p *page) selectOption(ctx context.Context, selector, text string) error {
 // stops that wait and leaves the rest of the run its time, so the
 // error names the wait that failed and not the run.
 func (p *page) waitFor(ctx context.Context, selector string, budget time.Duration) error {
-	sel, _ := json.Marshal(selector)
+	sel, _ := json.Marshal(selector, lenient)
 	expr := fmt.Sprintf(`(() => {
 		const el = document.querySelector(%s);
 		return !!el && el.getClientRects().length > 0;
@@ -419,7 +420,7 @@ func (p *page) startScreencast(ctx context.Context) (*screencast, error) {
 					Timestamp float64 `json:"timestamp"`
 				} `json:"metadata"`
 			}
-			if json.Unmarshal(raw, &ev) != nil {
+			if json.Unmarshal(raw, &ev, lenient) != nil {
 				continue
 			}
 			_ = p.call(ctx, "Page.screencastFrameAck", map[string]any{"sessionId": ev.Frame}, nil)

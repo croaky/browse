@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/gif"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/croaky/is"
 )
@@ -220,6 +224,54 @@ func TestChromeExits(t *testing.T) {
 	is.HasErr(err)
 	t.Log(err)
 	is.True(strings.Contains(err.Error(), "chrome said: [1:FATAL:zygote_host_impl_linux.cc:129] No usable sandbox!"))
+}
+
+// replyPipe is the fd 3 end of a fake Chrome. It keeps each message
+// that call writes and answers with reply on the fd 4 end.
+type replyPipe struct {
+	w     *io.PipeWriter
+	reply string
+	got   chan string
+}
+
+func (p *replyPipe) Write(b []byte) (int, error) {
+	p.got <- string(b)
+	go p.w.Write([]byte(p.reply + "\x00"))
+	return len(b), nil
+}
+
+func (p *replyPipe) Close() error { return p.w.Close() }
+
+// TestCallInvalidUTF8 runs everywhere. A page string can hold a lone
+// UTF-16 surrogate, and a selector from the command line can hold
+// invalid UTF-8. call sends and receives both with U+FFFD in place,
+// as encoding/json v1 did, and does not wait for a reply it dropped.
+func TestCallInvalidUTF8(t *testing.T) {
+	is := is.New(t)
+
+	r, w := io.Pipe()
+	pipe := &replyPipe{w: w, reply: `{"id":1,"result":{"value":"a\ud800b"}}`, got: make(chan string, 1)}
+	exited := make(chan struct{})
+	close(exited)
+	c := &chrome{
+		w:       pipe,
+		r:       bufio.NewReader(r),
+		stderr:  &stderrTail{},
+		exited:  exited,
+		pending: map[int]chan message{},
+		closed:  make(chan struct{}),
+	}
+	go c.read()
+	defer w.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var res struct {
+		Value string `json:"value"`
+	}
+	is.NoErr(c.call(ctx, "", "Runtime.evaluate", map[string]any{"expression": "a\xffb"}, &res))
+	is.Eq(res.Value, "a\uFFFDb")
+	is.Eq(<-pipe.got, `{"id":1,"method":"Runtime.evaluate","params":{"expression":"a`+"\uFFFD"+`b"}}`+"\x00")
 }
 
 func TestSlug(t *testing.T) {

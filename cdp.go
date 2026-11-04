@@ -3,7 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -42,15 +43,25 @@ type chrome struct {
 
 // message is every shape the pipe carries, in one struct. A field that
 // is zero is left out on the way out, so a call and an event and a
-// reply all marshal to what Chrome expects.
+// reply all marshal to what Chrome expects. omitzero and not omitempty
+// on id, params, and result: encoding/json/v2 omitempty keeps a zero
+// int and drops an empty params map that a call sends.
 type message struct {
-	ID        int             `json:"id,omitempty"`
-	Method    string          `json:"method,omitempty"`
-	Params    any             `json:"params,omitempty"`
-	SessionID string          `json:"sessionId,omitempty"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     *cdpError       `json:"error,omitempty"`
+	ID        int            `json:"id,omitzero"`
+	Method    string         `json:"method,omitempty"`
+	Params    any            `json:"params,omitzero"`
+	SessionID string         `json:"sessionId,omitempty"`
+	Result    jsontext.Value `json:"result,omitzero"`
+	Error     *cdpError      `json:"error,omitempty"`
 }
+
+// lenient lets a message hold invalid UTF-8 and puts U+FFFD in its
+// place. A JavaScript string can hold a lone UTF-16 surrogate, and
+// Chrome sends it as a \ud800 escape. Without lenient, the reader
+// drops that reply and its call waits until the run times out. A
+// selector or a text from the command line can hold invalid UTF-8,
+// and without lenient its call fails.
+var lenient = jsontext.AllowInvalidUTF8(true)
 
 type cdpError struct {
 	Code    int    `json:"code"`
@@ -64,9 +75,9 @@ type cdpError struct {
 type subscription struct {
 	method    string
 	sessionID string
-	ch        chan json.RawMessage
+	ch        chan jsontext.Value
 	ready     chan struct{}
-	queue     []json.RawMessage
+	queue     []jsontext.Value
 }
 
 // stderrTail keeps the last 4 KB that Chrome writes to stderr. When
@@ -220,7 +231,7 @@ func (c *chrome) read() {
 		}
 		raw = raw[:len(raw)-1]
 		var m message
-		if err := json.Unmarshal(raw, &m); err != nil {
+		if err := json.Unmarshal(raw, &m, lenient); err != nil {
 			continue
 		}
 		c.mu.Lock()
@@ -238,7 +249,7 @@ func (c *chrome) read() {
 				kept = append(kept, s)
 				continue
 			}
-			params, _ := json.Marshal(m.Params)
+			params, _ := json.Marshal(m.Params, lenient)
 			if s.ready != nil {
 				// A stream never blocks the reader and never drops an
 				// event. Its caller keeps the queue short.
@@ -273,7 +284,7 @@ func (c *chrome) call(ctx context.Context, sessionID, method string, params any,
 	c.pending[id] = ch
 	c.mu.Unlock()
 
-	raw, err := json.Marshal(message{ID: id, Method: method, Params: params, SessionID: sessionID})
+	raw, err := json.Marshal(message{ID: id, Method: method, Params: params, SessionID: sessionID}, lenient)
 	if err != nil {
 		return err
 	}
@@ -305,7 +316,7 @@ func (c *chrome) call(ctx context.Context, sessionID, method string, params any,
 			return fmt.Errorf("%s: %s", method, m.Error.Message)
 		}
 		if out != nil && len(m.Result) > 0 {
-			if err := json.Unmarshal(m.Result, out); err != nil {
+			if err := json.Unmarshal(m.Result, out, lenient); err != nil {
 				return fmt.Errorf("%s: decode result: %w", method, err)
 			}
 		}
@@ -322,8 +333,8 @@ func (c *chrome) call(ctx context.Context, sessionID, method string, params any,
 // event named method on sessionID, then closes. Subscribe before the
 // call that causes the event, or the event can land first and be
 // dropped.
-func (c *chrome) subscribe(method, sessionID string) <-chan json.RawMessage {
-	s := &subscription{method: method, sessionID: sessionID, ch: make(chan json.RawMessage, 1)}
+func (c *chrome) subscribe(method, sessionID string) <-chan jsontext.Value {
+	s := &subscription{method: method, sessionID: sessionID, ch: make(chan jsontext.Value, 1)}
 	c.mu.Lock()
 	c.subs = append(c.subs, s)
 	c.mu.Unlock()
@@ -349,7 +360,7 @@ func (c *chrome) listen(method, sessionID string) *stream {
 
 // next returns the oldest event that is not read yet. It waits for
 // one, and returns false when stop closes or the connection ends.
-func (st *stream) next(stop <-chan struct{}) (json.RawMessage, bool) {
+func (st *stream) next(stop <-chan struct{}) (jsontext.Value, bool) {
 	for {
 		st.c.mu.Lock()
 		if len(st.s.queue) > 0 {
