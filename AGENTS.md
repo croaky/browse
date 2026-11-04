@@ -140,20 +140,20 @@ plain push after a sync stops and says so.
 
 ## Releases
 
-browse has no tags. A user installs a commit on `main` by its Go
-pseudo-version. croaky/laptop pins one in `laptop.sh`, and each run of
-`laptop.sh` installs that build over the one in `~/go/bin`. A stale pin
-puts back an older build and takes away the newer actions and flags.
+sockeye is origin and holds no tags. `scripts/tag vX.Y.Z` publishes one
+annotated tag to the GitHub mirror, which is what `go install`
+resolves. Run it from the main checkout after the merge, since it tags
+the tip of `main` and refuses any other commit.
 
-After a merge that changes the binary, bump the pin in a laptop change.
-Read the pseudo-version of the merge commit:
+croaky/laptop pins a tag in `laptop.sh`, and each run of `laptop.sh`
+installs that build over the one in `~/go/bin`. A stale pin puts back
+an older build and takes away the newer actions and flags.
 
-```sh
-go list -m -f '{{.Version}}' github.com/croaky/browse@<commit>
-```
-
-Put it in the `go install github.com/croaky/browse@...` line of
-`laptop.sh`. A merge that changes only docs or checks needs no bump.
+After a merge that changes the binary, publish a tag, then bump the
+`go install github.com/croaky/browse@...` line of `laptop.sh` to it in
+a laptop change. Raise the minor version for a new action or flag, and
+the patch version for a fix. A merge that changes only docs or checks
+needs no tag.
 
 ## Commits
 
