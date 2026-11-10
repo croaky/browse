@@ -34,7 +34,11 @@
 // not in a process list or a shell history:
 //
 //	BROWSE_COOKIE  cookies for the URL's host: name=value; name2=value2
-//	BROWSE_HEADER  headers on every request, one per line: Name: value
+//
+// Chrome sends each cookie to the URL's host and no other. There is no
+// header variable: Chrome sends an extra header to every host the page
+// contacts, so a token in it goes to each third-party script and
+// redirect target too.
 //
 // The browser is a pinned chrome-headless-shell from Chrome for
 // Testing, downloaded once into the user cache directory. -chrome or
@@ -85,7 +89,6 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintf(fs.Output(), "from the text. Write a colon in the selector as \\: .\n\n")
 	fmt.Fprintf(fs.Output(), "environment:\n")
 	fmt.Fprintf(fs.Output(), "  BROWSE_COOKIE  cookies for the URL's host: name=value; name2=value2\n")
-	fmt.Fprintf(fs.Output(), "  BROWSE_HEADER  headers on every request, one per line: Name: value\n")
 	fmt.Fprintf(fs.Output(), "  BROWSE_CHROME  a Chrome binary, instead of the pinned headless shell\n\n")
 	fmt.Fprintf(fs.Output(), "flags:\n")
 	fs.PrintDefaults()
@@ -124,9 +127,8 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	headers, err := parseHeaders(os.Getenv("BROWSE_HEADER"))
-	if err != nil {
-		return err
+	if os.Getenv("BROWSE_HEADER") != "" {
+		return errors.New("BROWSE_HEADER is gone: Chrome sent it to every host the page contacted; use BROWSE_COOKIE, which goes to the URL's host only")
 	}
 	if *video != "" && strings.ToLower(filepath.Ext(*video)) != ".gif" {
 		return fmt.Errorf("-video %q: want a path that ends in .gif", *video)
@@ -170,9 +172,6 @@ func run(args []string) error {
 		return err
 	}
 	if err := p.setCookies(ctx, rawURL, cookies); err != nil {
-		return err
-	}
-	if err := p.setHeaders(ctx, headers); err != nil {
 		return err
 	}
 	var cast *screencast
@@ -259,24 +258,6 @@ func parseCookies(s string) ([]cookie, error) {
 			return nil, fmt.Errorf("BROWSE_COOKIE: %q: want name=value", part)
 		}
 		out = append(out, cookie{Name: name, Value: strings.TrimSpace(value)})
-	}
-	return out, nil
-}
-
-// parseHeaders reads BROWSE_HEADER: one "Name: value" per line.
-func parseHeaders(s string) (map[string]string, error) {
-	out := map[string]string{}
-	for line := range strings.SplitSeq(s, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		name, value, ok := strings.Cut(line, ":")
-		name = strings.TrimSpace(name)
-		if !ok || name == "" {
-			return nil, fmt.Errorf("BROWSE_HEADER: %q: want Name: value", line)
-		}
-		out[name] = strings.TrimSpace(value)
 	}
 	return out, nil
 }

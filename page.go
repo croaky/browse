@@ -45,7 +45,7 @@ const phoneUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
 	"AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
 // open creates a tab and attaches to it. It sets the viewport and
-// nothing else: cookies and headers are the caller's next calls.
+// nothing else: cookies are the caller's next call.
 func open(ctx context.Context, c *chrome, v viewport) (*page, error) {
 	var t struct {
 		TargetID string `json:"targetId"`
@@ -107,17 +107,6 @@ func (p *page) setCookies(ctx context.Context, url string, cookies []cookie) err
 		}
 	}
 	return nil
-}
-
-// setHeaders adds headers to every request the page makes.
-func (p *page) setHeaders(ctx context.Context, headers map[string]string) error {
-	if len(headers) == 0 {
-		return nil
-	}
-	if err := p.call(ctx, "Network.enable", nil, nil); err != nil {
-		return err
-	}
-	return p.call(ctx, "Network.setExtraHTTPHeaders", map[string]any{"headers": headers}, nil)
 }
 
 // navigate loads url and returns after the load event. A navigation

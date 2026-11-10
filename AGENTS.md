@@ -47,7 +47,7 @@ One `main` package at the repo root. Five files, one concern each:
 - `cdp.go` starts the browser and speaks the DevTools Protocol over
   `--remote-debugging-pipe`. It knows message ids, sessions, and
   events. It knows no method by name.
-- `page.go` is one tab: viewport, cookies, headers, navigation, the
+- `page.go` is one tab: viewport, cookies, navigation, the
   action vocabulary, the screenshot, and the screencast. Every
   protocol method the tool uses is named here.
 - `gif.go` encodes screencast frames as an animated GIF. It knows
@@ -122,9 +122,9 @@ compile, and a laptop proves the browser. A change to `cdp.go`,
 
 - Unit tests of the parsers and the slug, which run everywhere.
 - `TestBrowse`, which serves a page from `httptest`, records the cookie
-  and header the browser sent, clicks, waits, types, and decodes the
-  PNG. It also asserts the two failure messages a user reads most: an
-  action with no match, and a server that is not there.
+  the browser sent, clicks, waits, types, and decodes the PNG. It
+  also asserts the two failure messages a user reads most: an action
+  with no match, and a server that is not there.
 
 Assert on the message text where the message is the product. A user
 of this tool is often an agent reading stderr, and the sentence is

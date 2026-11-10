@@ -99,17 +99,21 @@ visible after 5s`.
 ## Auth
 
 Most pages worth a screenshot are behind a login. `browse` takes
-cookies and headers from the environment, not from flags, so a secret
-is not in a process list or a shell history:
+cookies from the environment, not from flags, so a secret is not in a
+process list or a shell history:
 
 ```sh
 BROWSE_COOKIE='session=abc123' browse http://localhost:3000/
-BROWSE_HEADER='Authorization: Bearer abc123' browse http://localhost:3000/
 ```
 
 `BROWSE_COOKIE` is the shape of a `Cookie` header: `name=value` pairs
-separated by semicolons, set for the URL's host. `BROWSE_HEADER` is
-one `Name: value` per line, sent on every request.
+separated by semicolons, set for the URL's host. Chrome sends each
+cookie to that host and no other.
+
+There is no header variable. Chrome sends an extra header to every
+host the page contacts: each third-party script, font, image, and
+redirect target. So a bearer token in a header leaks to all of them.
+A run with `BROWSE_HEADER` set stops and says to use `BROWSE_COOKIE`.
 
 An app that wants an agent to see its pages writes a small wrapper
 that mints a session for a development user, puts it in
@@ -144,9 +148,9 @@ nothing for the next run to find.
 
 The pin holds until a Chrome release breaks something this tool uses,
 or until a page needs a newer renderer. `TestBrowse` is the guard: it
-drives the real browser through a cookie, a header, a pointer event,
-phone emulation, and a PNG decode. A bump is its own commit, with a
-laptop run of that test in the description.
+drives the real browser through a cookie, a pointer event, phone
+emulation, and a PNG decode. A bump is its own commit, with a laptop
+run of that test in the description.
 
 ## Linux
 

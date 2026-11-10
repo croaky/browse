@@ -110,15 +110,16 @@ func TestParseCookies(t *testing.T) {
 	is.HasErr(err)
 }
 
-func TestParseHeaders(t *testing.T) {
+// TestHeaderGone runs everywhere: run refuses BROWSE_HEADER before it
+// starts the browser. Chrome sent that header to every host the page
+// contacted, so a user who still sets it learns why the login stops.
+func TestHeaderGone(t *testing.T) {
 	is := is.New(t)
 
-	got, err := parseHeaders("Authorization: Bearer x:y\n\nX-Test: 1\n")
-	is.NoErr(err)
-	is.Eq(got, map[string]string{"Authorization": "Bearer x:y", "X-Test": "1"})
-
-	_, err = parseHeaders("nocolon")
+	t.Setenv("BROWSE_HEADER", "Authorization: Bearer abc123")
+	err := run([]string{"-video", "run.mp4", "http://localhost/"})
 	is.HasErr(err)
+	is.Eq(err.Error(), "BROWSE_HEADER is gone: Chrome sent it to every host the page contacted; use BROWSE_COOKIE, which goes to the URL's host only")
 }
 
 func TestWriteGIF(t *testing.T) {
@@ -294,9 +295,9 @@ func TestSlug(t *testing.T) {
 // TestBrowse drives the real browser against a local server. It skips
 // under -short, which is how CI runs it: a runner would download the
 // shell on every cold cache and may lack its shared libraries. The
-// server records the cookie and header it received, the page has a
-// button that reveals a box, and the test asserts on the record and
-// on the PNG dimensions.
+// server records the cookie it received, the page has a button that
+// reveals a box, and the test asserts on the record and on the PNG
+// dimensions.
 func TestBrowse(t *testing.T) {
 	if testing.Short() {
 		t.Skip("-short: skipping the browser run")
@@ -304,13 +305,12 @@ func TestBrowse(t *testing.T) {
 	is := is.New(t)
 
 	var mu sync.Mutex
-	var gotCookie, gotHeader, gotUA string
+	var gotCookie, gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		if c, err := r.Cookie("session"); err == nil {
 			gotCookie = c.Value
 		}
-		gotHeader = r.Header.Get("X-Browse")
 		gotUA = r.UserAgent()
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/html")
@@ -358,7 +358,6 @@ func TestBrowse(t *testing.T) {
 	out := filepath.Join(dir, "shot.png")
 	video := filepath.Join(dir, "run.gif")
 	t.Setenv("BROWSE_COOKIE", "session=abc123")
-	t.Setenv("BROWSE_HEADER", "X-Browse: yes")
 
 	err := run([]string{
 		"-width", "640", "-height", "480", "-out", out, "-steps", "-video", video,
@@ -387,7 +386,6 @@ func TestBrowse(t *testing.T) {
 
 	mu.Lock()
 	is.Eq(gotCookie, "abc123")
-	is.Eq(gotHeader, "yes")
 	mu.Unlock()
 
 	data, err := os.ReadFile(out)
