@@ -116,6 +116,28 @@ compile, and a laptop proves the browser. A change to `cdp.go`,
 `page.go`, or `shell.go` needs a laptop run of the suite without
 `-short`, and the change description says so.
 
+## Security boundaries
+
+A page, a redirect target, and Chrome's stderr are untrusted input.
+Escape controls and bound the whole diagnostic, not each label alone.
+Escaping text does not make it a trusted instruction. Keep the real
+cause of a timeout separate from text a page chooses.
+
+Credentials need a destination rule. Test cookie delivery to the named
+host and refusal at a different host, with a local redirect fixture.
+Do not restore headers that Chrome sends to every request. Refuse a
+non-HTTP entry URL before starting Chrome. State separately whether a
+rule covers redirects and subresources; an entry check proves neither.
+
+A privileged install uses a root-owned staging directory. A path check
+alone does not prove ownership or stop a race. Use synthetic files to
+test extraction and refusal; never read a real secret as a fixture.
+
+Keep small boundary regressions on each push. A protocol, page, or
+browser change still needs the real-browser run required below. Compare
+repeated benchmarks before changing a security guard for speed. Bound
+long fuzz and benchmark runs and give scheduled failures an owner.
+
 ## Tests
 
 `main_test.go` holds two kinds of test:
