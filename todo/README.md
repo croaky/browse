@@ -29,10 +29,6 @@ full text of a finding.
   with raw control characters. Attacker 1, the page boundary.
   Outcome: fix. Plan:
   `todo/002-refuse-non-http-urls-and-quote-page-text.md`.
-- `find_01Pk4gx4E7mExxfowTVrmq53` (medium): the README Linux steps
-  stage the root-owned shell in a fixed path in `/tmp`. Attacker 3,
-  the root boundary. Outcome: fix the docs. Plan:
-  `todo/003-stage-linux-shell-in-opt.md`.
 
 ## Workflow
 

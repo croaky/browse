@@ -173,8 +173,8 @@ namespaces for that path only:
 v=153.0.8010.47   # shellVersion in shell.go
 sudo mkdir -p /opt/chrome-headless-shell
 curl -fsSLO "https://storage.googleapis.com/chrome-for-testing-public/$v/linux64/chrome-headless-shell-linux64.zip"
-sudo unzip -q chrome-headless-shell-linux64.zip -d /tmp
-sudo mv /tmp/chrome-headless-shell-linux64 /opt/chrome-headless-shell/$v
+sudo unzip -q chrome-headless-shell-linux64.zip -d /opt/chrome-headless-shell
+sudo mv /opt/chrome-headless-shell/chrome-headless-shell-linux64 /opt/chrome-headless-shell/$v
 sudo tee /etc/apparmor.d/chrome-headless-shell >/dev/null <<'EOF'
 abi <abi/4.0>,
 include <tunables/global>
@@ -186,6 +186,11 @@ EOF
 sudo apparmor_parser -r /etc/apparmor.d/chrome-headless-shell
 export BROWSE_CHROME=/opt/chrome-headless-shell/$v/chrome-headless-shell
 ```
+
+Root extracts the zip inside the root-owned
+`/opt/chrome-headless-shell`, so no other user can make a path that
+the steps use. Do not extract into `/tmp`: another user can make the
+directory there first and then own the shell.
 
 The profile names the root-owned path, not the user cache. A profile
 for a path the user can write lets any program the user puts there
