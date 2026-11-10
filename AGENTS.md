@@ -216,7 +216,37 @@ description short and clear:
   argument in a code comment or a plan, and give its path.
 - Use plain paragraphs. Git strips a `#` line as a comment, so a
   Markdown header disappears.
-- Hard-wrap at 72 columns. Don't backslash-escape backticks. Use a
-  quoted heredoc such as `<<'EOF'` with `soc edit`.
+- Hard-wrap at 72 columns, except a trailer (below). Don't
+  backslash-escape backticks. Use a quoted heredoc such as `<<'EOF'`
+  with `soc edit`.
 - Keep `Co-Authored-By` on the commits, not in the description. The
-  merge collects the trailers from the commits it squashes.
+  merge collects `Co-Authored-By` from the commits it squashes.
+
+## Trailers
+
+End the change description with one block of trailers, with no blank
+line between them. Keep each trailer on one line, even past 72
+columns.
+
+- `Requested-by: name, channel, thread or subject, date` records who
+  asked for the work, when somebody other than the author asked.
+- `Reported-by: Claude Security at claude.ai/security` credits a
+  finding from the Claude Security scanner.
+- `Fixes:` names each Claude Security finding the change fixes
+  (`Fixes: find_01... and find_02...`), or each production error group
+  (`Fixes: ERR-1F`). Do not write `Fixes: CWE-...`. A CWE names a
+  category, not a finding.
+- Do not type `Co-Authored-By`, `Reviewed-by`, or `Signed-off-by` in
+  the description. The merge derives them from the commits and the
+  comments.
+
+The squash merge writes the description to `main`, not the commit
+messages. The first push of a branch with one commit copies its
+trailers to the description, except the ones the merge derives. A
+later `soc edit` writes only what it reads, so keep the trailers in
+it:
+
+    git --no-pager log -1 --format=%B | sed '/^Co-Authored-By:/d' | soc edit
+
+Before the merge, read the description in `soc show` and confirm that
+it ends with the trailers.
