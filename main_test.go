@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -244,6 +246,31 @@ func TestWriteGIF(t *testing.T) {
 	is.True(r < 0x1000)
 }
 
+// TestPixel runs everywhere. The direct read of *image.RGBA and
+// *image.NRGBA gives the same color as src.At, alpha included, so a
+// GIF frame does not change with the image type that image/png picks.
+func TestPixel(t *testing.T) {
+	is := is.New(t)
+
+	r := image.Rect(2, 1, 6, 4)
+	srcs := []image.Image{image.NewRGBA(r), image.NewNRGBA(r)}
+	for _, src := range srcs {
+		m := src.(draw.Image)
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			for x := r.Min.X; x < r.Max.X; x++ {
+				m.Set(x, y, color.NRGBA{uint8(x * 40), uint8(y * 60), 0xc8, uint8(0x30 + x*y*20)})
+			}
+		}
+		at := pixel(src)
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			for x := r.Min.X; x < r.Max.X; x++ {
+				cr, cg, cb, _ := src.At(x, y).RGBA()
+				is.Eq(at(x, y), color.RGBA{uint8(cr >> 8), uint8(cg >> 8), uint8(cb >> 8), 0xff})
+			}
+		}
+	}
+}
+
 // TestVideoPath runs everywhere: run refuses the path before it
 // starts the browser.
 func TestVideoPath(t *testing.T) {
@@ -300,7 +327,7 @@ func TestCallAfterDeadline(t *testing.T) {
 	is := is.New(t)
 
 	c := &chrome{
-		pending: map[int]chan message{},
+		pending: map[int]chan incoming{},
 		readErr: errors.New("chrome closed the connection: EOF; chrome said: page text"),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
@@ -343,7 +370,7 @@ func TestCallInvalidUTF8(t *testing.T) {
 		r:       bufio.NewReader(r),
 		stderr:  &stderrTail{},
 		exited:  exited,
-		pending: map[int]chan message{},
+		pending: map[int]chan incoming{},
 		closed:  make(chan struct{}),
 	}
 	go c.read()
@@ -550,4 +577,151 @@ func TestBrowse(t *testing.T) {
 	err = run([]string{"-out", out, srv.URL + "/page"})
 	is.HasErr(err)
 	is.True(strings.Contains(err.Error(), "ERR_CONNECTION_REFUSED"))
+}
+
+// pagePNG encodes a w by h frame that looks like a screenshot of an
+// app page: a white body, a dark header, grey rows of text with
+// anti-aliased edges, a border, and a 64 by 64 photo. Each benchmark
+// of the -video path gets the same frame, so a result compares to the
+// last one.
+func pagePNG(tb testing.TB, w, h int) []byte {
+	tb.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(img, image.Rect(0, 0, w, 56), &image.Uniform{color.RGBA{0x0b, 0x1f, 0x6b, 0xff}}, image.Point{}, draw.Src)
+	for y := 96; y+12 < h; y += 24 {
+		for x := 32; x < w-32; x++ {
+			// A glyph is 7 pixels wide with a gap, and its edge pixels
+			// take one of four greys, as a text renderer leaves them.
+			if x%9 == 8 {
+				continue
+			}
+			for dy := range 12 {
+				v := uint8(0x22 + (x*7+dy*13)%4*0x30)
+				img.SetRGBA(x, y+dy, color.RGBA{v, v, v, 0xff})
+			}
+		}
+		img.SetRGBA(16, y, color.RGBA{0xdd, 0xdd, 0xdd, 0xff})
+	}
+	for y := range 64 {
+		for x := range 64 {
+			img.SetRGBA(w-96+x, 72+y, color.RGBA{uint8(x * 4), uint8(y * 4), uint8(0x80 + x + y), 0xff})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		tb.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// BenchmarkWriteGIF encodes five 1280 by 900 frames, about a second of
+// a -video run on a desktop viewport.
+func BenchmarkWriteGIF(b *testing.B) {
+	data := pagePNG(b, 1280, 900)
+	frames := make([]frame, 5)
+	for i := range frames {
+		frames[i] = frame{PNG: data, At: float64(i) / 5}
+	}
+	b.SetBytes(int64(len(data) * len(frames)))
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := writeGIF(io.Discard, frames, 2); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkPaletted maps one decoded 1280 by 900 frame to its palette,
+// without the PNG decode and the GIF encode.
+func BenchmarkPaletted(b *testing.B) {
+	src, err := png.Decode(bytes.NewReader(pagePNG(b, 1280, 900)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(1280 * 900 * 4)
+	b.ReportAllocs()
+	for b.Loop() {
+		paletted(src, 1280, 900)
+	}
+}
+
+// BenchmarkReadScreencast feeds the reader goroutine the messages of a
+// -video run: screencast frames that a stream queues, and events that
+// no caller asked for.
+func BenchmarkReadScreencast(b *testing.B) {
+	data := base64.StdEncoding.EncodeToString(pagePNG(b, 1280, 900))
+	var in bytes.Buffer
+	for i := range 5 {
+		fmt.Fprintf(&in, `{"method":"Page.screencastFrame","params":{"data":%q,"metadata":{"timestamp":%d.5,"deviceWidth":1280,"deviceHeight":900},"sessionId":%d},"sessionId":"S1"}`+"\x00", data, i, i+1)
+		fmt.Fprintf(&in, `{"method":"Network.dataReceived","params":{"requestId":"%d","timestamp":%d.25,"dataLength":512,"encodedDataLength":0},"sessionId":"S1"}`+"\x00", i, i)
+	}
+	exited := make(chan struct{})
+	close(exited)
+	b.SetBytes(int64(in.Len()))
+	b.ReportAllocs()
+	for b.Loop() {
+		s := &subscription{method: "Page.screencastFrame", sessionID: "S1", ready: make(chan struct{}, 1)}
+		c := &chrome{
+			r:      bufio.NewReader(bytes.NewReader(in.Bytes())),
+			stderr: &stderrTail{},
+			exited: exited,
+			subs:   []*subscription{s},
+			closed: make(chan struct{}),
+		}
+		c.read()
+		if len(s.queue) != 5 {
+			b.Fatalf("queued %d frames, want 5", len(s.queue))
+		}
+	}
+}
+
+// BenchmarkStderrReason reads a full 4 KB tail of console lines with a
+// FATAL line at the start, the most work reason does.
+func BenchmarkStderrReason(b *testing.B) {
+	var tail stderrTail
+	_, _ = tail.Write([]byte("[1:FATAL:zygote_host_impl_linux.cc:129] No usable sandbox!\n"))
+	for i := 0; len(tail.b) < 4096; i++ {
+		_, _ = fmt.Fprintf(&tail, "[1109/204100.%06d:INFO:CONSOLE:1] \"render row %d\", source: http://localhost:3000/app.js (1)\n", i, i)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		tail.reason()
+	}
+}
+
+func BenchmarkPageText(b *testing.B) {
+	for _, bc := range []struct{ name, s string }{
+		{"label", "Select a rating"},
+		{"exception", "TypeError: Cannot read properties of null (reading 'click')\n    at <anonymous>:1:38\n    at async run (app.js:12:3)"},
+		{"hostile", strings.Repeat("\x1b[31mred\rbrowse: forged ", 40)},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				pageText(bc.s)
+			}
+		})
+	}
+}
+
+// BenchmarkParseArgs parses a long command line: the URL, the actions,
+// and BROWSE_COOKIE, then names the output file.
+func BenchmarkParseArgs(b *testing.B) {
+	args := []string{"click=.tab", "wait=#drawer", `type=li\:nth-child(2) input[name=q]:acme corp`, "select=#rating:8", "hover=nav a", "sleep=250ms"}
+	cookies := "session=4f1c2a9e8b7d6c5e4f3a2b1c0d9e8f7a; theme=dark; csrf=ab12cd34ef56"
+	b.ReportAllocs()
+	for b.Loop() {
+		u, err := checkURL("http://localhost:3000/companies/1234/Settings?tab=docs")
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := parseActions(args); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := parseCookies(cookies); err != nil {
+			b.Fatal(err)
+		}
+		slug(u)
+	}
 }

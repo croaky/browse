@@ -71,19 +71,31 @@ func writeGIF(w io.Writer, frames []frame, end float64) error {
 // color, so a gradient or a large photo shows bands.
 func paletted(src image.Image, w, h int) *image.Paletted {
 	b := src.Bounds()
+	at := pixel(src)
 	px := make([]color.RGBA, w*h)
 	count := map[color.RGBA]int{}
+	// A page is mostly runs of one color, so the map takes one update
+	// for each run, not one for each pixel.
+	run, n := color.RGBA{}, 0
 	for y := range h {
 		sy := y * b.Dx() / w
 		for x := range w {
 			c := color.RGBA{0xff, 0xff, 0xff, 0xff}
 			if sy < b.Dy() {
-				r, g, bl, _ := src.At(b.Min.X+x*b.Dx()/w, b.Min.Y+sy).RGBA()
-				c = color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(bl >> 8), 0xff}
+				c = at(b.Min.X+x*b.Dx()/w, b.Min.Y+sy)
 			}
 			px[y*w+x] = c
-			count[c]++
+			if c != run {
+				if n > 0 {
+					count[run] += n
+				}
+				run, n = c, 0
+			}
+			n++
 		}
+	}
+	if n > 0 {
+		count[run] += n
 	}
 	// The ties break on the color, so a frame always gets the same
 	// palette.
@@ -117,17 +129,49 @@ func paletted(src image.Image, w, h int) *image.Paletted {
 		pal = append(pal, color.RGBA{uint8(gr.r / gr.n), uint8(gr.g / gr.n), uint8(gr.b / gr.n), 0xff})
 	}
 	// Each color searches the palette once, not once for each pixel.
+	// A pixel of the same color as the last one takes the last index.
 	index := map[color.RGBA]uint8{}
 	dst := image.NewPaletted(image.Rect(0, 0, w, h), pal)
+	last, k := color.RGBA{}, uint8(0)
 	for i, c := range px {
-		k, ok := index[c]
-		if !ok {
-			k = uint8(pal.Index(c))
-			index[c] = k
+		if i == 0 || c != last {
+			var ok bool
+			if k, ok = index[c]; !ok {
+				k = uint8(pal.Index(c))
+				index[c] = k
+			}
+			last = c
 		}
 		dst.Pix[i] = k
 	}
 	return dst
+}
+
+// pixel returns a function that reads the opaque color of src at x, y,
+// with the alpha premultiplied as color.Color.RGBA does. image/png
+// decodes Chrome's frames to *image.RGBA or *image.NRGBA. For those,
+// it reads Pix directly: src.At returns an interface and allocates
+// once for each pixel. Any other image type goes through src.At.
+func pixel(src image.Image) func(x, y int) color.RGBA {
+	switch m := src.(type) {
+	case *image.RGBA:
+		return func(x, y int) color.RGBA {
+			i := m.PixOffset(x, y)
+			s := m.Pix[i : i+3 : i+3]
+			return color.RGBA{s[0], s[1], s[2], 0xff}
+		}
+	case *image.NRGBA:
+		return func(x, y int) color.RGBA {
+			i := m.PixOffset(x, y)
+			s := m.Pix[i : i+4 : i+4]
+			r, g, b, _ := color.NRGBA{s[0], s[1], s[2], s[3]}.RGBA()
+			return color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), 0xff}
+		}
+	}
+	return func(x, y int) color.RGBA {
+		r, g, b, _ := src.At(x, y).RGBA()
+		return color.RGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), 0xff}
+	}
 }
 
 // rgb packs a color into 0xRRGGBB.

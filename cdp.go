@@ -35,24 +35,36 @@ type chrome struct {
 
 	mu      sync.Mutex
 	nextID  int
-	pending map[int]chan message
+	pending map[int]chan incoming
 	subs    []*subscription
 	readErr error
 	closed  chan struct{}
 }
 
-// message is every shape the pipe carries, in one struct. A field that
-// is zero is left out on the way out, so a call and an event and a
-// reply all marshal to what Chrome expects. omitzero and not omitempty
-// on id, params, and result: encoding/json/v2 omitempty keeps a zero
+// message is a call on the way out. A field that is zero is left out,
+// so a call marshals to what Chrome expects. omitzero and not
+// omitempty on id and params: encoding/json/v2 omitempty keeps a zero
 // int and drops an empty params map that a call sends.
 type message struct {
-	ID        int            `json:"id,omitzero"`
-	Method    string         `json:"method,omitempty"`
-	Params    any            `json:"params,omitzero"`
-	SessionID string         `json:"sessionId,omitempty"`
-	Result    jsontext.Value `json:"result,omitzero"`
-	Error     *cdpError      `json:"error,omitempty"`
+	ID        int    `json:"id,omitzero"`
+	Method    string `json:"method,omitempty"`
+	Params    any    `json:"params,omitzero"`
+	SessionID string `json:"sessionId,omitempty"`
+}
+
+// incoming is every shape the pipe carries back: a reply with an id
+// and a result or an error, or an event with a method and params.
+// Params stays raw JSON. A screencast event holds a frame of a few
+// hundred KB in base64, and its subscriber decodes the params into its
+// own struct. A decode into any and a marshal back would copy the frame
+// twice more.
+type incoming struct {
+	ID        int            `json:"id"`
+	Method    string         `json:"method"`
+	Params    jsontext.Value `json:"params"`
+	SessionID string         `json:"sessionId"`
+	Result    jsontext.Value `json:"result"`
+	Error     *cdpError      `json:"error"`
 }
 
 // lenient lets a message hold invalid UTF-8 and puts U+FFFD in its
@@ -188,7 +200,7 @@ func launch(ctx context.Context, path string, width, height int) (*chrome, error
 		r:       bufio.NewReaderSize(fromChromeR, 1<<20),
 		stderr:  stderr,
 		exited:  make(chan struct{}),
-		pending: map[int]chan message{},
+		pending: map[int]chan incoming{},
 		closed:  make(chan struct{}),
 	}
 	// Wait returns after Chrome exits and its stderr is copied, so
@@ -236,7 +248,7 @@ func (c *chrome) read() {
 			return
 		}
 		raw = raw[:len(raw)-1]
-		var m message
+		var m incoming
 		if err := json.Unmarshal(raw, &m, lenient); err != nil {
 			continue
 		}
@@ -249,13 +261,17 @@ func (c *chrome) read() {
 			c.mu.Unlock()
 			continue
 		}
+		// An event with no params gives its subscriber null.
+		if m.Params == nil {
+			m.Params = jsontext.Value("null")
+		}
 		kept := c.subs[:0]
 		for _, s := range c.subs {
 			if s.method != m.Method || s.sessionID != m.SessionID {
 				kept = append(kept, s)
 				continue
 			}
-			params, _ := json.Marshal(m.Params, lenient)
+			params := m.Params
 			if s.ready != nil {
 				// A stream never blocks the reader and never drops an
 				// event. Its caller keeps the queue short.
@@ -294,7 +310,7 @@ func (c *chrome) call(ctx context.Context, sessionID, method string, params any,
 	}
 	c.nextID++
 	id := c.nextID
-	ch := make(chan message, 1)
+	ch := make(chan incoming, 1)
 	c.pending[id] = ch
 	c.mu.Unlock()
 
