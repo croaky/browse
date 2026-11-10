@@ -100,16 +100,22 @@ func (t *stderrTail) Write(p []byte) (int, error) {
 
 // reason is Chrome's last FATAL line, or else its last line. It is ""
 // when Chrome wrote nothing.
+//
+// The tail is not only Chrome's own text. The headless shell writes a
+// page's console message to stderr as an INFO:CONSOLE line, with the
+// page's bytes raw. So a line counts as FATAL only by its log header,
+// "[...:FATAL:...]", and not by a word in its message. The line comes
+// back through pageText, escaped and cut like any page string.
 func (t *stderrTail) reason() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	lines := strings.Split(strings.TrimSpace(string(t.b)), "\n")
 	for _, line := range slices.Backward(lines) {
-		if strings.Contains(line, "FATAL") {
-			return strings.TrimSpace(line)
+		if header, _, ok := strings.Cut(line, "]"); ok && strings.HasPrefix(line, "[") && strings.Contains(header, ":FATAL:") {
+			return pageText(strings.TrimSpace(line))
 		}
 	}
-	return strings.TrimSpace(lines[len(lines)-1])
+	return pageText(strings.TrimSpace(lines[len(lines)-1]))
 }
 
 // chromePath finds the browser. The flag wins, then BROWSE_CHROME, then
@@ -272,7 +278,15 @@ func (c *chrome) read() {
 // call sends one method and waits for its reply. sessionID is empty
 // for a browser-level method and a page session otherwise. out, when
 // not nil, receives the result.
+//
+// A run past its deadline gets the context error, even when the
+// connection is closed too. The deadline kills Chrome, and a call after
+// Go work such as a GIF encode would otherwise report Chrome's stderr
+// and not the timeout.
 func (c *chrome) call(ctx context.Context, sessionID, method string, params any, out any) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", method, err)
+	}
 	c.mu.Lock()
 	if c.readErr != nil {
 		c.mu.Unlock()
@@ -307,6 +321,9 @@ func (c *chrome) call(ctx context.Context, sessionID, method string, params any,
 	select {
 	case m, ok := <-ch:
 		if !ok {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("%s: %w", method, err)
+			}
 			c.mu.Lock()
 			err := c.readErr
 			c.mu.Unlock()

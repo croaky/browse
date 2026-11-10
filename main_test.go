@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -267,6 +268,47 @@ func TestChromeExits(t *testing.T) {
 	is.HasErr(err)
 	t.Log(err)
 	is.True(strings.Contains(err.Error(), "chrome said: [1:FATAL:zygote_host_impl_linux.cc:129] No usable sandbox!"))
+}
+
+// TestStderrReason runs everywhere. The headless shell writes a page's
+// console text to its stderr as an INFO:CONSOLE line, with the page's
+// bytes raw. Only a FATAL log header picks a line, and the line comes
+// back escaped and cut, so the page cannot shape the error.
+func TestStderrReason(t *testing.T) {
+	is := is.New(t)
+
+	var tail stderrTail
+	_, _ = tail.Write([]byte("[1:FATAL:zygote_host_impl_linux.cc:129] No usable sandbox!\n" +
+		"[1109/204100.454268:INFO:CONSOLE:1] \"FATAL \x1b[31mred\rbrowse: forged\", source: http://x/ (1)\n"))
+	is.Eq(tail.reason(), "[1:FATAL:zygote_host_impl_linux.cc:129] No usable sandbox!")
+
+	// With no FATAL header, the last line is the reason, escaped.
+	var page stderrTail
+	_, _ = page.Write([]byte("[1109/204100.454268:INFO:CONSOLE:1] \"FATAL \x1b[31mred\rbrowse: forged" + strings.Repeat("x", 300) + "\"\n"))
+	got := page.reason()
+	is.True(!strings.ContainsAny(got, "\x1b\r\n"))
+	is.True(strings.Contains(got, `\x1b[31mred\rbrowse: forged`))
+	// pageText cuts the line to 200 bytes before it escapes them.
+	is.True(strings.HasSuffix(got, "..."))
+	is.True(len(got) < 300)
+}
+
+// TestCallAfterDeadline runs everywhere. When the run's deadline kills
+// Chrome during Go work, such as a long GIF encode, the next call
+// reports the timeout, not Chrome's stderr.
+func TestCallAfterDeadline(t *testing.T) {
+	is := is.New(t)
+
+	c := &chrome{
+		pending: map[int]chan message{},
+		readErr: errors.New("chrome closed the connection: EOF; chrome said: page text"),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancel()
+	<-ctx.Done()
+	err := c.call(ctx, "", "Page.captureScreenshot", nil, nil)
+	is.True(errors.Is(err, context.DeadlineExceeded))
+	is.True(!strings.Contains(err.Error(), "chrome said"))
 }
 
 // replyPipe is the fd 3 end of a fake Chrome. It keeps each message

@@ -80,9 +80,12 @@ says how long it waited: `wait=#box: no element matches "#box" and is
 visible after 5s`.
 
 An error can hold text from the page: a JavaScript exception, a tag
-name, or an option label. `browse` escapes each control character in
-that text as `\x1b` or `\n` and cuts it at 200 bytes. So a page cannot
-move the terminal cursor or write a false `browse:` line on stderr.
+name, an option label, or a line of Chrome's stderr, where the
+headless shell writes the page's console messages. `browse` escapes
+each control character in that text as `\x1b` or `\n` and cuts it at
+200 bytes. So a page cannot move the terminal cursor or write a false
+`browse:` line on stderr. A run past `-timeout` reports the timeout,
+not Chrome's stderr.
 
 ## Flags
 
