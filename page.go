@@ -7,8 +7,10 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // page is one tab, attached as a flat session so every call carries
@@ -154,12 +156,32 @@ func (p *page) eval(ctx context.Context, expr string, out any) error {
 		if ex.Exception != nil && ex.Exception.Description != "" {
 			msg = ex.Exception.Description
 		}
-		return fmt.Errorf("javascript: %s", msg)
+		return fmt.Errorf("javascript: %s", pageText(msg))
 	}
 	if out != nil && len(res.Result.Value) > 0 {
 		return json.Unmarshal(res.Result.Value, out, lenient)
 	}
 	return nil
+}
+
+// pageText makes a string from the page safe to put in an error. The
+// page chooses an exception message, a tag name, and an option label,
+// and an error goes to a terminal or to an agent that reads stderr.
+// So pageText escapes each control character as Go does, \x1b or \n,
+// and cuts the string to 200 bytes. A tag name or a label with no
+// control character comes back as it was.
+func pageText(s string) string {
+	const limit = 200
+	cut := ""
+	if len(s) > limit {
+		i := limit
+		for i > 0 && !utf8.RuneStart(s[i]) {
+			i--
+		}
+		s, cut = s[:i], "..."
+	}
+	q := strconv.Quote(s)
+	return q[1:len(q)-1] + cut
 }
 
 // point is the center of an element in viewport coordinates.
@@ -287,11 +309,11 @@ func (p *page) selectOption(ctx context.Context, selector, text string) error {
 	case !res.Found:
 		return fmt.Errorf("no element matches %q", selector)
 	case res.Tag != "select":
-		return fmt.Errorf("%q is <%s>, not <select>", selector, res.Tag)
+		return fmt.Errorf("%q is <%s>, not <select>", selector, pageText(res.Tag))
 	case !res.Picked:
 		names := make([]string, len(res.Options))
 		for i, o := range res.Options {
-			names[i] = fmt.Sprintf("%q (%s)", o.Value, o.Label)
+			names[i] = fmt.Sprintf("%q (%s)", o.Value, pageText(o.Label))
 		}
 		return fmt.Errorf("no option %q in %q; want a value or label of: %s", text, selector, strings.Join(names, ", "))
 	}

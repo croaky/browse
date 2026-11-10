@@ -15,10 +15,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/croaky/is"
 )
@@ -120,6 +122,46 @@ func TestHeaderGone(t *testing.T) {
 	err := run([]string{"-video", "run.mp4", "http://localhost/"})
 	is.HasErr(err)
 	is.Eq(err.Error(), "BROWSE_HEADER is gone: Chrome sent it to every host the page contacted; use BROWSE_COOKIE, which goes to the URL's host only")
+}
+
+// TestCheckURL runs everywhere. Only http and https pass. A file URL
+// with a host would load a local file into the PNG, and a chrome URL
+// can crash or hang the browser.
+func TestCheckURL(t *testing.T) {
+	is := is.New(t)
+
+	for _, ok := range []string{"http://localhost/", "HTTPS://example.com/", "http://127.0.0.1:3000/a?b=c"} {
+		_, err := checkURL(ok)
+		is.NoErr(err)
+	}
+	for _, bad := range []string{
+		"file://localhost/etc/passwd",
+		"chrome://version",
+		"javascript://x/alert(1)",
+		"view-source:http://localhost/",
+		"/relative",
+		"http:///nohost",
+	} {
+		_, err := checkURL(bad)
+		is.HasErr(err)
+		is.Eq(err.Error(), "url "+strconv.Quote(bad)+": want an absolute http or https URL")
+	}
+}
+
+// TestPageText runs everywhere. A string from the page goes into an
+// error with its control characters escaped and its length bounded,
+// so it cannot move the cursor or start a new line on stderr.
+func TestPageText(t *testing.T) {
+	is := is.New(t)
+
+	is.Eq(pageText("input"), "input")
+	is.Eq(pageText("Café menu"), "Café menu")
+	is.Eq(pageText("\x1b[31mred\nbrowse: forged\u009b"), `\x1b[31mred\nbrowse: forged\u009b`)
+
+	long := pageText(strings.Repeat("é", 300))
+	is.True(strings.HasSuffix(long, "..."))
+	is.True(len(long) <= 203)
+	is.True(utf8.ValidString(long))
 }
 
 func TestWriteGIF(t *testing.T) {
@@ -314,6 +356,15 @@ func TestBrowse(t *testing.T) {
 		gotUA = r.UserAgent()
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/html")
+		if r.URL.Path == "/hostile" {
+			// A page that writes terminal control sequences and a forged
+			// browse: line into the two errors it can shape.
+			_, _ = w.Write([]byte(`<!doctype html>
+<select id="evil"><option value="x" label="&#27;[31mred&#10;browse: forged">x</option></select>
+<button id="b">b</button>
+<script>Element.prototype.scrollIntoView = () => { throw new Error("\x1b[2J\nbrowse: forged") }</script>`))
+			return
+		}
 		_, _ = w.Write([]byte(`<!doctype html>
 <title>browse test</title>
 <style>#box { display: none; width: 100px; height: 100px; background: #0079ff }</style>
@@ -434,6 +485,16 @@ func TestBrowse(t *testing.T) {
 	err = run([]string{"-out", out, srv.URL + "/page", "select=#q:a"})
 	is.HasErr(err)
 	is.True(strings.Contains(err.Error(), `select=#q:a: "#q" is <input>, not <select>`))
+
+	// A hostile page's text reaches the error escaped: no raw ESC and
+	// no raw newline, so it stays on the one line browse writes.
+	for _, a := range []string{"select=#evil:y", "click=#b"} {
+		err = run([]string{"-out", out, srv.URL + "/hostile", a})
+		is.HasErr(err)
+		t.Log(err)
+		is.True(!strings.ContainsAny(err.Error(), "\x1b\n"))
+		is.True(strings.Contains(err.Error(), `\x1b[`))
+	}
 
 	// A wait spends its own budget, not the run's, and says how long
 	// it waited. #box is in the page but hidden until the click.

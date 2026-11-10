@@ -14,6 +14,10 @@ browse -full -out tmp/index.png http://localhost:3000/
 browse -steps -video tmp/search.gif http://localhost:3000/ 'type=#q:acme' wait=.results
 ```
 
+The URL is an absolute `http` or `https` URL. `browse` refuses any
+other scheme before Chrome starts, so `file://localhost/etc/passwd`
+cannot put a local file into the PNG.
+
 On success it prints each path it wrote, one per line, with the main
 PNG last, and nothing else. On failure it prints why and exits 1.
 The default path is `<slug>.png` in the
@@ -74,6 +78,11 @@ An action that fails names itself and the selector:
 `click=#missing: no element matches "#missing"`. A wait that fails
 says how long it waited: `wait=#box: no element matches "#box" and is
 visible after 5s`.
+
+An error can hold text from the page: a JavaScript exception, a tag
+name, or an option label. `browse` escapes each control character in
+that text as `\x1b` or `\n` and cuts it at 200 bytes. So a page cannot
+move the terminal cursor or write a false `browse:` line on stderr.
 
 ## Flags
 

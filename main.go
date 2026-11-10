@@ -4,6 +4,9 @@
 //
 //	browse [flags] <url> [action...]
 //
+// The URL is an absolute http or https URL. Any other scheme, such as
+// file or chrome, is an error before the browser starts.
+//
 // Actions run in order after the page loads and before the screenshot:
 //
 //	click=<selector>          click the first match
@@ -115,9 +118,9 @@ func run(args []string) error {
 		return errors.New("a URL is required")
 	}
 	rawURL := fs.Arg(0)
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("url %q: want an absolute http or https URL", rawURL)
+	u, err := checkURL(rawURL)
+	if err != nil {
+		return err
 	}
 	actions, err := parseActions(fs.Args()[1:])
 	if err != nil {
@@ -231,6 +234,19 @@ func run(args []string) error {
 		fmt.Println(path)
 	}
 	return nil
+}
+
+// checkURL accepts an absolute http or https URL with a host and
+// refuses every other scheme before Chrome starts. Chrome loads
+// file://localhost/<path> as a local file, so that URL would put a
+// file the user can read into the PNG. A chrome:// URL can crash or
+// hang the browser.
+func checkURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || !(strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "https")) {
+		return nil, fmt.Errorf("url %q: want an absolute http or https URL", raw)
+	}
+	return u, nil
 }
 
 // writeFile writes data to path and makes its directory first.
