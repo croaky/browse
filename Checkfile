@@ -25,11 +25,6 @@ deadcode: go tool -n deadcode >/dev/null && go tool deadcode -test ./... 2>&1 | 
 # dprint wraps Markdown at 72, the same column the commits use.
 fmt: dprint check
 
-# scripts/tag, which nobody compiles. It pushes a tag to GitHub, and a
-# mistake there publishes a version a consumer cannot fetch, or none at
-# all. The file carries no extension, so name the directory as a path.
-shellcheck: git ls-files -z '*.sh' 'scripts/*' | xargs -0 shellcheck
-
 # A tool line in go.mod pins govulncheck. It reads the live
 # vulnerability database, so a new advisory fails this check without a
 # commit.

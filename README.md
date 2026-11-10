@@ -5,7 +5,7 @@ agent or a person who wants to see a page of a local app without a
 browser window.
 
 ```sh
-go install github.com/croaky/browse@latest
+go install github.com/croaky/browse@main
 
 browse http://localhost:3000/help
 browse -phone http://localhost:3000/portfolio
