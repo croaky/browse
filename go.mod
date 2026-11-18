@@ -2,7 +2,7 @@ module github.com/croaky/browse
 
 go 1.27.3
 
-require github.com/croaky/is v0.2.0
+require github.com/croaky/is v0.2.2
 
 require (
 	golang.org/x/mod v0.42.0 // indirect
