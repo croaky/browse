@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/gif"
@@ -24,7 +26,11 @@ import (
 // sends frames without its window bars, and a device scale can differ.
 // So each frame scales to the canvas width, keeps its aspect, and pads
 // the rest of the canvas white.
-func writeGIF(w io.Writer, frames []frame, end float64) error {
+//
+// The encode stops when ctx ends. The -timeout deadline kills Chrome,
+// but the encode is Go work, so without this check it ran past
+// -timeout for as long as the frames took.
+func writeGIF(ctx context.Context, w io.Writer, frames []frame, end float64) error {
 	if len(frames) == 0 {
 		return errors.New("no frames")
 	}
@@ -35,6 +41,9 @@ func writeGIF(w io.Writer, frames []frame, end float64) error {
 	// No global palette: each frame carries its own.
 	out := &gif.GIF{Config: image.Config{Width: canvas.Width, Height: canvas.Height}}
 	for i, f := range frames {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("encode stopped at frame %d of %d: %w", i+1, len(frames), err)
+		}
 		src, err := png.Decode(bytes.NewReader(f.PNG))
 		if err != nil {
 			return err

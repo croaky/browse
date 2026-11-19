@@ -13,6 +13,7 @@ import (
 	"image/gif"
 	"image/png"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -167,6 +168,133 @@ func TestPageText(t *testing.T) {
 	is.True(utf8.ValidString(long))
 }
 
+// rawControl reports whether s holds a byte or rune that a terminal
+// acts on: C0, DEL, C1, or a bidi override.
+func rawControl(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == '\u202e'
+	})
+}
+
+// TestDiagnostic runs everywhere. main prints each error through
+// diagnostic, so whatever text an error holds, the line on stderr has
+// no raw control and stays under the bound.
+func TestDiagnostic(t *testing.T) {
+	is := is.New(t)
+
+	is.Eq(diagnostic(errors.New(`click=#x: no element matches "#x"`)), `click=#x: no element matches "#x"`)
+	is.Eq(diagnostic(errors.New("Café")), "Café")
+	// pageText output keeps its backslashes, so it is not escaped twice.
+	is.Eq(diagnostic(errors.New(pageText("\x1b[2J"))), `\x1b[2J`)
+	is.Eq(diagnostic(errors.New("a\x1b[2J\r\n\tb\x7f\u009b\u202e\xff")), `a\x1b[2J\r\n\tb\x7f\u009b\u202e\xff`)
+
+	for _, long := range []string{
+		strings.Repeat("\x1b[31mred\rbrowse: forged ", 1<<14),
+		strings.Repeat("é", 1<<20),
+	} {
+		got := diagnostic(fmt.Errorf("select=#s:x: %w", errors.New(long)))
+		is.True(!rawControl(got))
+		is.True(utf8.ValidString(got))
+		is.True(len(got) <= maxDiagnostic+len("... (99999999 more bytes)"))
+		is.True(strings.Contains(got, "more bytes)"))
+	}
+}
+
+// TestDownloadDiagnostic runs everywhere. A network peer on the path
+// of the shell download chooses the text of the error: here, a status
+// line with controls and 100 KB of text. The error goes through
+// download, the wrap in ensureShell, and diagnostic, as on a first run.
+func TestDownloadDiagnostic(t *testing.T) {
+	is := is.New(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	is.NoErr(err)
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = bufio.NewReader(c).ReadString('\n')
+		status := "HTTP/1.1 503 \x1b[2J\x1b[Hbrowse: forged \u202e" + strings.Repeat("A", 100_000)
+		_, _ = c.Write([]byte(status + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
+	}()
+
+	url := "http://" + ln.Addr().String() + "/shell.zip"
+	err = download(t.Context(), url, filepath.Join(t.TempDir(), "shell.zip"))
+	is.HasErr(err)
+	t.Logf("raw error holds a control: %v, %d bytes", rawControl(err.Error()), len(err.Error()))
+	got := diagnostic(fmt.Errorf("download %s: %w", url, err))
+	is.True(!rawControl(got))
+	is.True(len(got) <= maxDiagnostic+len("... (99999999 more bytes)"))
+}
+
+// TestOptionList runs everywhere. The error of a select= action that
+// matches no option names at most maxOptionHints options, escapes
+// each one, and counts the rest.
+func TestOptionList(t *testing.T) {
+	is := is.New(t)
+
+	is.Eq(optionList([]optionHint{{"", "None"}, {"a", "Alpha"}}, 2), `"" (None), "a" (Alpha)`)
+	is.Eq(optionList([]optionHint{{"a", "Alpha"}}, 40), `"a" (Alpha), and 39 more`)
+	is.Eq(optionList([]optionHint{{"\x1b\"", "\x1b[31mred\nforged"}}, 1), `"\x1b\"" (\x1b[31mred\nforged)`)
+
+	// A script that sends more than it should still meets the cut.
+	hostile := make([]optionHint, 4096)
+	for i := range hostile {
+		hostile[i] = optionHint{strings.Repeat("\x1b", 1<<16), strings.Repeat("v", 1<<16)}
+	}
+	got := optionList(hostile, len(hostile))
+	is.True(!rawControl(got))
+	is.True(strings.HasSuffix(got, "and 4088 more"))
+	// Each hint is at most 200 escaped bytes of value (4 bytes each),
+	// 200 bytes of label, two "..." marks, and its punctuation.
+	is.True(len(got) <= maxOptionHints*(4*200+200+6+8)+len("and 4088 more"))
+}
+
+// TestScreencastKeep runs everywhere. A page that paints without end
+// cannot raise the frames or the bytes a recording holds, and the
+// frames it keeps still span the run in order.
+func TestScreencastKeep(t *testing.T) {
+	is := is.New(t)
+
+	s := &screencast{stride: 1}
+	for i := range 10_000 {
+		s.keep(frame{PNG: make([]byte, 1000), At: float64(i)})
+		is.True(len(s.frames) <= maxFrames)
+	}
+	is.Eq(s.frames[0].At, 0.0)
+	is.True(s.frames[len(s.frames)-1].At > 9000)
+	for i := 1; i < len(s.frames); i++ {
+		is.True(s.frames[i].At > s.frames[i-1].At)
+	}
+
+	s = &screencast{stride: 1}
+	for i := range 500 {
+		s.keep(frame{PNG: make([]byte, 1<<20), At: float64(i)})
+		is.True(s.bytes <= maxFrameBytes)
+	}
+
+	// One frame over the byte limit stays: there is nothing to drop.
+	s = &screencast{stride: 1}
+	s.keep(frame{PNG: make([]byte, maxFrameBytes+1)})
+	is.Eq(len(s.frames), 1)
+}
+
+// TestWriteGIFDeadline runs everywhere. The encode stops when the run's
+// context ends, so -timeout holds after Chrome sent the frames.
+func TestWriteGIFDeadline(t *testing.T) {
+	is := is.New(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	frames := []frame{{PNG: pagePNG(t, 64, 48), At: 1}}
+	err := writeGIF(ctx, io.Discard, frames, 2)
+	is.True(errors.Is(err, context.Canceled))
+	is.Eq(err.Error(), "encode stopped at frame 1 of 1: context canceled")
+}
+
 func TestWriteGIF(t *testing.T) {
 	is := is.New(t)
 
@@ -185,7 +313,7 @@ func TestWriteGIF(t *testing.T) {
 		{PNG: sized(4, 3, color.White), At: 100.505},
 	}
 	var buf bytes.Buffer
-	is.NoErr(writeGIF(&buf, frames, 101.505))
+	is.NoErr(writeGIF(t.Context(), &buf, frames, 101.505))
 	g, err := gif.DecodeAll(&buf)
 	is.NoErr(err)
 	is.Eq(g.Delay, []int{50, 2, 100})
@@ -193,12 +321,12 @@ func TestWriteGIF(t *testing.T) {
 	is.Eq(g.Image[0].Bounds().Dy(), 3)
 
 	// A frame that is not a PNG is an error.
-	is.HasErr(writeGIF(&buf, []frame{{PNG: []byte("no"), At: 1}}, 2))
+	is.HasErr(writeGIF(t.Context(), &buf, []frame{{PNG: []byte("no"), At: 1}}, 2))
 
 	// A page color that no fixed palette holds keeps its exact value.
 	navy := color.RGBA{0x0b, 0x1f, 0x6b, 0xff}
 	buf.Reset()
-	is.NoErr(writeGIF(&buf, []frame{{PNG: sized(4, 3, navy), At: 1}}, 2))
+	is.NoErr(writeGIF(t.Context(), &buf, []frame{{PNG: sized(4, 3, navy), At: 1}}, 2))
 	g, err = gif.DecodeAll(&buf)
 	is.NoErr(err)
 	is.Eq(color.RGBAModel.Convert(g.Image[0].At(0, 0)), color.Color(navy))
@@ -217,7 +345,7 @@ func TestWriteGIF(t *testing.T) {
 	var enc bytes.Buffer
 	is.NoErr(png.Encode(&enc, img))
 	buf.Reset()
-	is.NoErr(writeGIF(&buf, []frame{{PNG: enc.Bytes(), At: 1}}, 2))
+	is.NoErr(writeGIF(t.Context(), &buf, []frame{{PNG: enc.Bytes(), At: 1}}, 2))
 	g, err = gif.DecodeAll(&buf)
 	is.NoErr(err)
 	is.Eq(color.RGBAModel.Convert(g.Image[0].At(3004, 0)), color.Color(red))
@@ -226,7 +354,7 @@ func TestWriteGIF(t *testing.T) {
 	// Chrome sends 1280 by 813 frames for a 1280 by 900 viewport, and
 	// a frame at half the width is one at a lower device scale.
 	buf.Reset()
-	is.NoErr(writeGIF(&buf, []frame{
+	is.NoErr(writeGIF(t.Context(), &buf, []frame{
 		{PNG: sized(8, 5, color.Black), At: 1},
 		{PNG: sized(4, 3, color.Black), At: 2},
 		{PNG: sized(8, 6, color.Black), At: 3},
@@ -425,6 +553,32 @@ func TestBrowse(t *testing.T) {
 		gotUA = r.UserAgent()
 		mu.Unlock()
 		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/many":
+			// 4096 options with long labels, and one value of 1 MB.
+			fmt.Fprint(w, `<!doctype html><select id="pick">`)
+			fmt.Fprintf(w, `<option value="%s">big</option>`, strings.Repeat("v", 1<<20))
+			for i := range 4096 {
+				fmt.Fprintf(w, `<option value="value%d">&#27;[2J%s</option>`, i, strings.Repeat("é", 200))
+			}
+			fmt.Fprint(w, `</select>`)
+			return
+		case "/noise":
+			// A canvas that repaints the whole viewport with noise on
+			// each animation frame, so each frame compresses badly.
+			_, _ = w.Write([]byte(`<!doctype html>
+<body style="margin:0"><canvas id="c"></canvas><script>
+const c = document.getElementById("c"), g = c.getContext("2d");
+c.width = innerWidth; c.height = innerHeight;
+const img = g.createImageData(c.width, c.height);
+(function paint() {
+  for (let i = 0; i < img.data.length; i++) img.data[i] = Math.random() * 256;
+  g.putImageData(img, 0, 0);
+  requestAnimationFrame(paint);
+})();
+</script>`))
+			return
+		}
 		if r.URL.Path == "/hostile" {
 			// A page that writes terminal control sequences and a forged
 			// browse: line into the two errors it can shape.
@@ -565,6 +719,38 @@ func TestBrowse(t *testing.T) {
 		is.True(strings.Contains(err.Error(), `\x1b[`))
 	}
 
+	// A select with thousands of long options gives a short error that
+	// counts the rest, and an option past the hints is still picked.
+	err = run([]string{"-out", out, srv.URL + "/many", "select=#pick:missing"})
+	is.HasErr(err)
+	is.True(len(err.Error()) < 16<<10)
+	is.True(strings.Contains(err.Error(), "and 4089 more"))
+	is.True(!rawControl(err.Error()))
+	is.True(len(diagnostic(err)) <= maxDiagnostic+len("... (99999999 more bytes)"))
+	err = run([]string{"-out", out, srv.URL + "/many", "select=#pick:value4095"})
+	is.NoErr(err)
+
+	// A page that repaints without end cannot hold the run past
+	// -timeout: the frame limit bounds the recording, and the encode
+	// stops at the deadline. The run either writes a GIF within the
+	// frame limit or reports the timeout.
+	start := time.Now()
+	noise := filepath.Join(dir, "noise.gif")
+	err = run([]string{"-timeout", "4s", "-out", out, "-video", noise, srv.URL + "/noise", "sleep=3s"})
+	elapsed := time.Since(start)
+	t.Logf("noise -video: %v after %s", err, elapsed)
+	is.True(elapsed < 6*time.Second)
+	if err != nil {
+		is.True(errors.Is(err, context.DeadlineExceeded))
+	} else {
+		f, err := os.Open(noise)
+		is.NoErr(err)
+		g, err := gif.DecodeAll(f)
+		f.Close()
+		is.NoErr(err)
+		is.True(len(g.Image) <= maxFrames+1)
+	}
+
 	// A wait spends its own budget, not the run's, and says how long
 	// it waited. #box is in the page but hidden until the click.
 	err = run([]string{"-out", out, "-wait", "200ms", srv.URL + "/page", "wait=#box"})
@@ -626,7 +812,7 @@ func BenchmarkWriteGIF(b *testing.B) {
 	b.SetBytes(int64(len(data) * len(frames)))
 	b.ReportAllocs()
 	for b.Loop() {
-		if err := writeGIF(io.Discard, frames, 2); err != nil {
+		if err := writeGIF(b.Context(), io.Discard, frames, 2); err != nil {
 			b.Fatal(err)
 		}
 	}

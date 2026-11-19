@@ -116,10 +116,39 @@ compile, and a laptop proves the browser. A change to `cdp.go`,
 `page.go`, or `shell.go` needs a laptop run of the suite without
 `-short`, and the change description says so.
 
+## Threat model
+
+Judge each security finding against this model. A finding needs a
+named attacker from the list, a consequence, and a boundary.
+
+The assets are the secrets in `BROWSE_COOKIE`, the files and the
+environment of the user who runs `browse`, and the text on stderr. A
+person or an agent reads that text and acts on it.
+
+The attackers:
+
+1. The page and every host it contacts: third-party scripts, images,
+   frames, and redirect targets.
+2. Text that an agent reads and that chooses the URL or the actions,
+   such as a prompt injection in an issue.
+3. A network peer on the path of the shell download, such as a plain
+   HTTP proxy. TLS protects the bytes of the shell. It does not
+   protect the text of an error.
+4. A local account on a shared Linux host, against the README install
+   steps.
+
+Out of scope: an attacker who already runs commands as the user, a
+Chrome renderer exploit, and the integrity of the shell download,
+which the README section "The browser" explains.
+
 ## Security boundaries
 
-A page, a redirect target, and Chrome's stderr are untrusted input.
-Escape controls and bound the whole diagnostic, not each label alone.
+A page, a redirect target, Chrome's stderr, and a download error are
+untrusted input. `main` prints every error through `diagnostic`, which
+escapes controls and bounds the whole line. Keep that the only place
+that prints an error, and still cut each page string with `pageText`.
+Bound page-sized data before it crosses the protocol, and bound what
+Go holds of it: the frames of a recording and the encode time.
 Escaping text does not make it a trusted instruction. Keep the real
 cause of a timeout separate from text a page chooses.
 

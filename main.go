@@ -68,15 +68,54 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "browse:", err)
+		fmt.Fprintln(os.Stderr, "browse:", diagnostic(err))
 		os.Exit(1)
 	}
+}
+
+// maxDiagnostic is the most bytes of an error that browse prints.
+const maxDiagnostic = 2000
+
+// diagnostic makes err safe to print. The text of an error can come
+// from a page, from Chrome, or from a network peer during the shell
+// download, and a terminal or an agent reads it. main prints every
+// error through here, so a new error is safe without a change at its
+// call site.
+//
+// diagnostic escapes each rune that is not printable, as Go does:
+// \x1b, \n, \u202e. A byte that is not UTF-8 becomes \xff. A
+// backslash stays as it is, so text that pageText escaped is not
+// escaped twice. The result stops at maxDiagnostic bytes, with the
+// count of the bytes it left out.
+func diagnostic(err error) string {
+	s := err.Error()
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		piece := s[i : i+n]
+		switch {
+		case r == utf8.RuneError && n == 1:
+			piece = fmt.Sprintf(`\x%02x`, s[i])
+		case !strconv.IsPrint(r):
+			q := strconv.QuoteRune(r)
+			piece = q[1 : len(q)-1]
+		}
+		if b.Len()+len(piece) > maxDiagnostic {
+			fmt.Fprintf(&b, "... (%d more bytes)", len(s)-i)
+			break
+		}
+		b.WriteString(piece)
+		i += n
+	}
+	return b.String()
 }
 
 func usage(fs *flag.FlagSet) {
@@ -213,7 +252,7 @@ func run(args []string) error {
 			return err
 		}
 		var buf bytes.Buffer
-		if err := writeGIF(&buf, frames, end); err != nil {
+		if err := writeGIF(ctx, &buf, frames, end); err != nil {
 			return fmt.Errorf("-video: %w", err)
 		}
 		wrote = append(wrote, *video)

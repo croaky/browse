@@ -284,23 +284,35 @@ func (p *page) selectOption(ctx context.Context, selector, text string) error {
 		if (!el) return {found: false};
 		const tag = el.tagName.toLowerCase();
 		if (tag !== "select") return {found: true, tag};
-		const opts = [...el.options];
-		const opt = opts.find(o => o.value === %[2]s) || opts.find(o => o.label.trim() === %[2]s);
-		if (!opt) return {found: true, tag, options: opts.map(o => ({value: o.value, label: o.label.trim()}))};
+		const opts = el.options, n = opts.length;
+		let opt = null;
+		for (let i = 0; i < n && !opt; i++) if (opts[i].value === %[2]s) opt = opts[i];
+		for (let i = 0; i < n && !opt; i++) if (opts[i].label.trim() === %[2]s) opt = opts[i];
+		if (!opt) {
+			const cut = v => {
+				const s = "" + v;
+				let t = "";
+				for (let i = 0; i < s.length && i < %[3]d; i++) t += s[i];
+				return t;
+			};
+			const options = [];
+			for (let i = 0; i < n && i < %[4]d; i++) {
+				options[i] = {value: cut(opts[i].value), label: cut(opts[i].label.trim())};
+			}
+			return {found: true, tag, count: n, options};
+		}
 		el.focus();
 		el.value = opt.value;
 		el.dispatchEvent(new Event("input", {bubbles: true}));
 		el.dispatchEvent(new Event("change", {bubbles: true}));
 		return {found: true, tag, picked: true};
-	})()`, sel, want)
+	})()`, sel, want, maxHintChars, maxOptionHints)
 	var res struct {
-		Found   bool   `json:"found"`
-		Tag     string `json:"tag"`
-		Picked  bool   `json:"picked"`
-		Options []struct {
-			Value string `json:"value"`
-			Label string `json:"label"`
-		} `json:"options"`
+		Found   bool         `json:"found"`
+		Tag     string       `json:"tag"`
+		Picked  bool         `json:"picked"`
+		Count   int          `json:"count"`
+		Options []optionHint `json:"options"`
 	}
 	if err := p.eval(ctx, expr, &res); err != nil {
 		return err
@@ -311,13 +323,42 @@ func (p *page) selectOption(ctx context.Context, selector, text string) error {
 	case res.Tag != "select":
 		return fmt.Errorf("%q is <%s>, not <select>", selector, pageText(res.Tag))
 	case !res.Picked:
-		names := make([]string, len(res.Options))
-		for i, o := range res.Options {
-			names[i] = fmt.Sprintf("%q (%s)", o.Value, pageText(o.Label))
-		}
-		return fmt.Errorf("no option %q in %q; want a value or label of: %s", text, selector, strings.Join(names, ", "))
+		return fmt.Errorf("no option %q in %q; want a value or label of: %s", text, selector, optionList(res.Options, res.Count))
 	}
 	return nil
+}
+
+// A select= action that matches no option names the first
+// maxOptionHints options, each cut to maxHintChars characters, and
+// the count of the rest. The page chooses how many options it has and
+// how long each one is. So the script cuts the list before it crosses
+// the protocol, and optionList cuts it again in Go. The script reads
+// each string by index, joins with +, and stores by index, so a page
+// that replaces a method such as String.prototype.slice or
+// Array.prototype.push cannot widen the cut. Whatever a page does to
+// the script, optionList and diagnostic in main still bound the text.
+const (
+	maxOptionHints = 8
+	maxHintChars   = 200
+)
+
+// optionHint is one option of a select, as the script sends it.
+type optionHint struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// optionList writes the options for the error, each value and label
+// through pageText, then "and N more" when count is larger.
+func optionList(opts []optionHint, count int) string {
+	names := make([]string, 0, maxOptionHints+1)
+	for _, o := range opts[:min(len(opts), maxOptionHints)] {
+		names = append(names, `"`+pageText(o.Value)+`" (`+pageText(o.Label)+`)`)
+	}
+	if more := count - len(names); more > 0 {
+		names = append(names, fmt.Sprintf("and %d more", more))
+	}
+	return strings.Join(names, ", ")
 }
 
 // waitFor polls until an element matches selector and has a box on
@@ -402,6 +443,44 @@ type screencast struct {
 	stop   chan struct{}
 	done   chan struct{}
 	frames []frame
+	// bytes is the PNG size of frames. seen counts each frame Chrome
+	// sent, and keep stores one frame in each stride of them.
+	bytes, seen, stride int
+}
+
+// A recording holds at most maxFrames frames and maxFrameBytes of
+// PNG. The page chooses how often it paints and how well each frame
+// compresses, so without a limit it chooses the memory of browse. The
+// GIF encode then holds one paletted image of the canvas size for each
+// frame, so the frame limit also bounds the encode.
+const (
+	maxFrames     = 128
+	maxFrameBytes = 64 << 20
+)
+
+// keep stores f when it is the first of its stride. At either limit,
+// keep drops every other frame it holds and doubles the stride. The
+// GIF then still covers the whole run, at a lower frame rate, and
+// each frame shows until the next one it kept.
+func (s *screencast) keep(f frame) {
+	s.seen++
+	if (s.seen-1)%s.stride != 0 {
+		return
+	}
+	s.frames = append(s.frames, f)
+	s.bytes += len(f.PNG)
+	for len(s.frames) > 1 && (len(s.frames) > maxFrames || s.bytes > maxFrameBytes) {
+		kept, n := s.frames[:0], 0
+		for i, f := range s.frames {
+			if i%2 == 0 {
+				kept = append(kept, f)
+				n += len(f.PNG)
+			}
+		}
+		clear(s.frames[len(kept):])
+		s.frames, s.bytes = kept, n
+		s.stride *= 2
+	}
 }
 
 // startScreencast starts the recording. Start it before navigate, so
@@ -411,10 +490,12 @@ type screencast struct {
 // shell allows three frames in flight (kMaxScreencastFramesInFlight
 // in page_handler.cc). So a one-shot subscription for each frame can
 // miss one, and Chrome then waits for an ack that never comes. A
-// stream queues every frame, and the queue holds three at most.
+// stream queues every frame. The ack goes after keep, so the queue
+// holds three frames at most, and Chrome sends no faster than browse
+// stores.
 func (p *page) startScreencast(ctx context.Context) (*screencast, error) {
 	st := p.c.listen("Page.screencastFrame", p.sessionID)
-	s := &screencast{p: p, st: st, stop: make(chan struct{}), done: make(chan struct{})}
+	s := &screencast{p: p, st: st, stop: make(chan struct{}), done: make(chan struct{}), stride: 1}
 	go func() {
 		defer close(s.done)
 		for {
@@ -434,12 +515,10 @@ func (p *page) startScreencast(ctx context.Context) (*screencast, error) {
 			if json.Unmarshal(raw, &ev, lenient) != nil {
 				continue
 			}
-			_ = p.call(ctx, "Page.screencastFrameAck", map[string]any{"sessionId": ev.Frame}, nil)
-			data, err := base64.StdEncoding.DecodeString(ev.Data)
-			if err != nil {
-				continue
+			if data, err := base64.StdEncoding.DecodeString(ev.Data); err == nil {
+				s.keep(frame{PNG: data, At: ev.Metadata.Timestamp})
 			}
-			s.frames = append(s.frames, frame{PNG: data, At: ev.Metadata.Timestamp})
+			_ = p.call(ctx, "Page.screencastFrameAck", map[string]any{"sessionId": ev.Frame}, nil)
 		}
 	}()
 	if err := p.call(ctx, "Page.startScreencast", map[string]any{"format": "png"}, nil); err != nil {

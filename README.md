@@ -80,12 +80,15 @@ says how long it waited: `wait=#box: no element matches "#box" and is
 visible after 5s`.
 
 An error can hold text from the page: a JavaScript exception, a tag
-name, an option label, or a line of Chrome's stderr, where the
-headless shell writes the page's console messages. `browse` escapes
-each control character in that text as `\x1b` or `\n` and cuts it at
-200 bytes. So a page cannot move the terminal cursor or write a false
-`browse:` line on stderr. A run past `-timeout` reports the timeout,
-not Chrome's stderr.
+name, an option, or a line of Chrome's stderr, where the headless
+shell writes the page's console messages. It can also hold text from
+a network peer during the shell download. `browse` cuts each page
+string at 200 bytes. It escapes each control character in the whole
+error as `\x1b` or `\n`, and cuts the whole error at 2,000 bytes. So
+the page and the network cannot move the terminal cursor, write a
+false `browse:` line, or fill the terminal. A `select` that matches
+no option names the first 8 options and counts the rest. A run past
+`-timeout` reports the timeout, not Chrome's stderr.
 
 ## Flags
 
@@ -183,10 +186,16 @@ namespaces for that path only:
 
 ```sh
 v=153.0.8010.47   # shellVersion in shell.go
-sudo mkdir -p /opt/chrome-headless-shell
-curl -fsSLO "https://storage.googleapis.com/chrome-for-testing-public/$v/linux64/chrome-headless-shell-linux64.zip"
-sudo unzip -q chrome-headless-shell-linux64.zip -d /opt/chrome-headless-shell
-sudo mv /opt/chrome-headless-shell/chrome-headless-shell-linux64 /opt/chrome-headless-shell/$v
+(
+  set -eu
+  sudo mkdir -p /opt/chrome-headless-shell
+  d=$(sudo mktemp -d /opt/chrome-headless-shell/.stage-XXXXXX)
+  trap 'sudo rm -rf "$d"' EXIT
+  sudo curl -fsSL -o "$d/shell.zip" \
+    "https://storage.googleapis.com/chrome-for-testing-public/$v/linux64/chrome-headless-shell-linux64.zip"
+  sudo unzip -q "$d/shell.zip" -d "$d"
+  sudo mv "$d/chrome-headless-shell-linux64" "/opt/chrome-headless-shell/$v"
+)
 sudo tee /etc/apparmor.d/chrome-headless-shell >/dev/null <<'EOF'
 abi <abi/4.0>,
 include <tunables/global>
@@ -199,10 +208,18 @@ sudo apparmor_parser -r /etc/apparmor.d/chrome-headless-shell
 export BROWSE_CHROME=/opt/chrome-headless-shell/$v/chrome-headless-shell
 ```
 
-Root extracts the zip inside the root-owned
-`/opt/chrome-headless-shell`, so no other user can make a path that
-the steps use. Do not extract into `/tmp`: another user can make the
-directory there first and then own the shell.
+Root downloads the zip into a new directory that only root can
+write, inside the root-owned `/opt/chrome-headless-shell`, and
+extracts it there. The steps read no path in the working directory or
+in `/tmp`, so no other user can put a file or a directory where root
+reads or writes. `set -e` stops the steps at the first failure, so a
+failed download extracts nothing, and the trap removes the staging
+directory.
+
+An install made with older steps from a directory that another user
+can write, such as `/tmp`, can hold that user's program. Root owns
+those files, so a check of the owner does not show it. Delete
+`/opt/chrome-headless-shell` and install again with the steps above.
 
 The profile names the root-owned path, not the user cache. A profile
 for a path the user can write lets any program the user puts there
@@ -232,6 +249,13 @@ small photo such as an avatar keeps its hue. A JPEG frame or a fixed
 palette such as Plan 9 puts a colored halo around text. Dithering adds
 noise that changes from frame to frame. A gradient or a large photo
 shows bands.
+
+A recording holds at most 128 frames and 64 MB of PNG. The page
+chooses how often it paints, so without a limit it chooses the memory
+of `browse`. At a limit, `browse` drops every other frame it holds and
+from then keeps one frame in two. The GIF still covers the whole run,
+at a lower frame rate. The GIF encode stops at `-timeout`, and the run
+then reports the timeout.
 
 Headless Chrome draws no pointer, so a click or a hover shows only by
 what it changes on the page.
